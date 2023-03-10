@@ -5,6 +5,7 @@ using System.IO;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
+using System.Drawing;
 using System.Windows.Forms;
 using System.Net;
 using System.Diagnostics;
@@ -18,30 +19,77 @@ namespace wesh
 
     class WESH
     {
-        [DllImport("user32.dll")]
+        [DllImport("user32.dll", CharSet = CharSet.Auto, CallingConvention = CallingConvention.StdCall)]
         private static extern bool SetForegroundWindow(IntPtr hWnd);
 
+        [DllImport("user32.dll", CharSet = CharSet.Auto, CallingConvention = CallingConvention.StdCall)]
+        public static extern void mouse_event(long dwFlags, long dx, long dy, long cButtons, long dwExtraInfo);
+
         public const double Version = 0.3;
-        public const string VersionStr = "BCSH v0.3 [14.02.2023]";
+        public const string VersionStr = "WESH v0.4 [10.03.2023]";
 
         public static Dictionary<string, Command> Commands = new Dictionary<string, Command>()
         {
+            {".", (args)=>{
+                return EvalJS(String.Join(" ", args));
+            } },
+
             {"echo", (args)=>{
                 return args[0];
             } },
 
-            {"cmdlist", (args)=>{
-                return String.Join(Environment.NewLine, Commands.Keys.ToArray());
-            } },
-
             {"set", (args)=>{
-                if (Variables.ContainsKey(args[0]))
+                if (args[0].Contains('.'))
                 {
-                    Variables[args[0]] = args[1];
+                    string[] sp = args[0].Split('.');
+                    if(!Variables.ContainsKey(sp[0]) || !UserObjects.ContainsKey(Variables[sp[0]])) return "ОШИБКА: Объект не найден.";
+                    if (UserObjects[Variables[sp[0]]].ContainsKey(sp[1]))
+                    {
+                        UserObjects[Variables[sp[0]]][sp[1]] = args[1];
+                    }
+                    else
+                    {
+                        UserObjects[Variables[sp[0]]].Add(sp[1], args[1]);
+                    }
                 }
                 else
                 {
-                    Variables.Add(args[0], args[1]);
+                    if (Variables.ContainsKey(args[0]))
+                    {
+                        Variables[args[0]] = args[1];
+                    }
+                    else
+                    {
+                        Variables.Add(args[0], args[1]);
+                    }
+                }
+                return "";
+            } },
+
+            {"sete", (args)=>{
+                if (args[0].Contains('.'))
+                {
+                    string[] sp = args[0].Split('.');
+                    if(!Variables.ContainsKey(sp[0]) || !UserObjects.ContainsKey(Variables[sp[0]])) return "ОШИБКА: Объект не найден.";
+                    if (UserObjects[Variables[sp[0]]].ContainsKey(sp[1]))
+                    {
+                        UserObjects[Variables[sp[0]]][sp[1]] = ExecSub(args[1]);
+                    }
+                    else
+                    {
+                        UserObjects[Variables[sp[0]]].Add(sp[1], ExecSub(args[1]));
+                    }
+                }
+                else
+                {
+                    if (Variables.ContainsKey(args[0]))
+                    {
+                        Variables[args[0]] = ExecSub(args[1]);
+                    }
+                    else
+                    {
+                        Variables.Add(args[0], ExecSub(args[1]));
+                    }
                 }
                 return "";
             } },
@@ -122,7 +170,15 @@ namespace wesh
             } },
 
             {"f", (args)=>{
-                return (Functions.ContainsKey(args[0])?ExecSub(Functions[args[0]]):"");
+                if(!Functions.ContainsKey(args[0])) return "";
+                string code = Functions[args[0]];
+
+                for(int i = 1; i < args.Length; i++)
+                {
+                    code = code.Replace("@#"+i, args[i]);
+                }
+
+                return ExecSub(code);
             } },
 
             {"clear", (args)=>{
@@ -219,6 +275,23 @@ namespace wesh
                 return "";
             } },
 
+            {"cmd.list", (args)=>{
+                return String.Join(Environment.NewLine, Commands.Keys.ToArray());
+            } },
+
+            {"cmd.add", (args)=>{
+                if(!Functions.ContainsKey(args[1])) return "";
+                Command func = (a)=>{
+                    var al = a.ToList();
+                    al.Insert(0, args[1]);
+                    return Commands["f"](al.ToArray());
+                };
+
+                if (Commands.ContainsKey(args[0])) Commands[args[0]] = func;
+                else Commands.Add(args[0], func);
+                return "";
+            } },
+
             {"str.contains", (args)=>{
                 return args[0].Contains(args[1])?"true":"false";
             } },
@@ -260,8 +333,19 @@ namespace wesh
             } },
 
             {"obj.create", (args)=>{
+                string name = GetRandomName();
+                UserObjects.Add(name, new Dictionary<string, string>());
+                Commands["set"](new string[]{ args[0], name });
+                return name;
+            } },
+
+            {"obj.createN", (args)=>{
                 UserObjects.Add(args[0], new Dictionary<string, string>());
                 return "";
+            } },
+
+            {"obj.listKeys", (args)=>{
+                return String.Join(Environment.NewLine, UserObjects[args[0]].Keys);
             } },
 
             {"obj.get", (args)=>{
@@ -270,7 +354,11 @@ namespace wesh
             } },
 
             {"obj.set", (args)=>{
-                if(UserObjects.ContainsKey(args[0]) && UserObjects[args[0]].ContainsKey(args[1])) UserObjects[args[0]][args[1]] = args[2];
+                if(UserObjects.ContainsKey(args[0]))
+                {
+                    if(UserObjects[args[0]].ContainsKey(args[1])) UserObjects[args[0]][args[1]] = args[2];
+                    else UserObjects[args[0]].Add(args[1], args[2]);
+                }
                 return "";
             } },
 
@@ -358,7 +446,7 @@ namespace wesh
             } },
 
             {"proc.getInfo", (args)=>{
-                string name = DateTime.Now.Ticks.ToString();
+                string name = GetRandomName();
                 var ps = Process.GetProcessesByName(args[0]);
                 if(ps.Length == 0) return "not_found";
                 var p = ps[0];
@@ -387,6 +475,47 @@ namespace wesh
                 SendKeys.SendWait(args[0]);
                 return "";
             } },
+
+            {"mouse.click", (args)=>{
+                string button = (args.Length>0?args[0]:"left");
+                int delay = (args.Length>1?ToInt(args[1]):10);
+
+                if(button == "left")
+                {
+                    mouse_event(0x2, 0, 0, 0, 0);
+                    Thread.Sleep(delay);
+                    mouse_event(0x4, 0, 0, 0, 0);
+                }else if(button == "right")
+                {
+                    mouse_event(0x8, 0, 0, 0, 0);
+                    Thread.Sleep(delay);
+                    mouse_event(0x10, 0, 0, 0, 0);
+                }else if(button == "middle")
+                {
+                    mouse_event(0x20, 0, 0, 0, 0);
+                    Thread.Sleep(delay);
+                    mouse_event(0x40, 0, 0, 0, 0);
+                }
+
+                return "";
+            } },
+
+            {"mouse.setPos", (args)=>{
+                Cursor.Position = new Point(ToInt(args[0]), ToInt(args[1]));
+                return "";
+            } },
+
+            {"mouse.getPos", (args)=>{
+                string name = GetRandomName();
+
+                UserObjects.Add(name, new Dictionary<string, string>()
+                {
+                    {"x", Cursor.Position.X.ToString() },
+                    {"y", Cursor.Position.Y.ToString() }
+                });
+
+                return name;
+            } }
         };
 
         public static Dictionary<string, string> Variables = new Dictionary<string, string>()
@@ -403,6 +532,20 @@ namespace wesh
             if (p.Length == 0) p = ".";
             Environment.CurrentDirectory = Variables["currdir"];
             return Path.IsPathRooted(p) ? p : Path.GetFullPath(p);
+        }
+
+        public static string GetRandomName()
+        {
+            var rand = new Random();
+            string cs = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+
+            char[] chars = new char[30];
+            for(int i = 0; i < chars.Length; i++)
+            {
+                chars[i] = cs[rand.Next(cs.Length)];
+            }
+
+            return new String(chars);
         }
 
         public static string GetRequest(string url)
@@ -438,9 +581,9 @@ namespace wesh
         public static void HelpMessage()
         {
             Console.WriteLine(@"
-bcsh [-v] [-h] [-c <команда>] -[f <файл>]
+wesh [-v] [-h] [-c <команда>] -[f <файл>]
 
-        [-v]            Выводит версию BCSH.
+        [-v]            Выводит версию WESH.
         [-h]            Выводит справочное сообщение.
         [-c <команда>]  Выполняет указанную команду.
         [-f <файл>]     Выполняет команды из файла в пакетном режиме.
@@ -499,6 +642,18 @@ bcsh [-v] [-h] [-c <команда>] -[f <файл>]
             }
         }
 
+        public static bool? StringToBool(string s)
+        {
+            if(s == "true") return true;
+            if(s == "false") return false;
+            return null;
+        }
+
+        public static string BoolToString(bool b)
+        {
+            return b ? "true" : "false";
+        }
+
         public static int ToInt(string s)
         {
             try
@@ -511,9 +666,14 @@ bcsh [-v] [-h] [-c <команда>] -[f <файл>]
             }
         }
 
+        public static string EvalJS(string expr)
+        {
+            return Eval.JScriptEvaluate(expr, Microsoft.JScript.Vsa.VsaEngine.CreateEngine()).ToString();
+        }
+
         public static bool Cond(string expr)
         {
-            return (bool)Eval.JScriptEvaluate(expr, Microsoft.JScript.Vsa.VsaEngine.CreateEngine());
+            return (bool)StringToBool(EvalJS(expr));
         }
 
         public static string ToBase64(string s)
@@ -568,9 +728,9 @@ bcsh [-v] [-h] [-c <команда>] -[f <файл>]
                 return r;
             }
 
-            cmd = cmd.Trim().Replace("\\`", "$Q3");
+            cmd = cmd.Trim().Replace('}', '{').Replace("\\{", "$Q3");
 
-            cmd = Regex.Replace(cmd, @"`([^`]*)`", new MatchEvaluator((m) =>
+            cmd = Regex.Replace(cmd, @"{([^{]*){", new MatchEvaluator((m) =>
             {
                 return m.Groups[1].Value.Replace("\\;", ";").Replace("'", "$Q1").Replace("\"", "$Q2").Replace(" ", "$SP").Replace(",", "$CM").Replace("@", "$AT").Replace("&", "$AM");
             }));
@@ -583,7 +743,7 @@ bcsh [-v] [-h] [-c <команда>] -[f <файл>]
             }));
 
             cmd = cmd.Replace(",", "");
-            args = cmd.Split(' ').ToList<string>();
+            args = cmd.Split(' ').ToList();
 
             cmd = args[0];
             if (args.Count == 1)
@@ -604,31 +764,43 @@ bcsh [-v] [-h] [-c <команда>] -[f <файл>]
                 arg = arg.Replace("$CM", ",");
                 arg = arg.Replace("$Q1", "'");
                 arg = arg.Replace("$Q2", "\"");
-                arg = arg.Replace("$Q3", "`");
+                arg = arg.Replace("$Q3", "{");
 
-                MatchCollection vMatches = new Regex(@"@[a-zA-Z_]+").Matches(arg);
+                MatchCollection vMatches = new Regex(@"@[a-zA-Z_\.]+").Matches(arg);
                 if (vMatches.Count > 0)
                 {
                     foreach (Match m in vMatches)
                     {
                         string val = m.Value;
                         val = val.Replace("@", "");
-                        if (Variables.ContainsKey(val))
+                        if (val.Contains("."))
+                        {
+                            string[] sp = val.Split('.');
+                            if(Variables.ContainsKey(sp[0]) && UserObjects.ContainsKey(Variables[sp[0]]) && UserObjects[Variables[sp[0]]].ContainsKey(sp[1]))
+                            {
+                                arg = arg.Replace(m.Value, UserObjects[Variables[sp[0]]][sp[1]]);
+                            }
+                        }else if (Variables.ContainsKey(val))
                         {
                             arg = arg.Replace(m.Value, Variables[val]);
                         }
                     }
                 }
 
-                MatchCollection eMatches = new Regex(@"\&{[^}]+}").Matches(arg);
+                MatchCollection eMatches = new Regex(@"\&\[[^\]]+\]").Matches(arg);
                 if (eMatches.Count > 0)
                 {
                     foreach (Match m in eMatches)
                     {
                         string val = m.Value;
-                        val = val.Replace("&{", "").Replace("}", "");
+                        val = val.Replace("&[", "").Replace("]", "");
                         arg = arg.Replace(m.Value, Exec(val));
                     }
+                }
+
+                if (arg[0] == '&' && arg[1] != '[')
+                {
+                    arg = Exec(arg.Substring(1));
                 }
 
                 arg = arg.Replace("$AM", "&").Replace("$AT", "@");
@@ -651,8 +823,8 @@ bcsh [-v] [-h] [-c <команда>] -[f <файл>]
         {
             cmd = Regex.Replace(cmd, @"^ ;", "");
             cmd = Regex.Replace(cmd, @"^ \\;", "");
-            cmd = Regex.Replace(cmd, @";\s+\\`", "\\`");
-            cmd = cmd.Replace("\n", "").Replace(", \\` ;", ", \\` ").Replace(";", "$SM");
+            cmd = Regex.Replace(cmd, @";\s+\\{", "\\{");
+            cmd = cmd.Replace("\n", "").Replace(", \\{ ;", ", \\{ ").Replace(";", "$SM");
             //Console.WriteLine("===DEBUG:\n"+cmd+"\nDEBUG===");
             return Exec(cmd);
         }
