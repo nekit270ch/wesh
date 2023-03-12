@@ -12,6 +12,7 @@ using System.Diagnostics;
 using System.Runtime.InteropServices;
 using Microsoft.JScript;
 using System.Security.Principal;
+using Microsoft.Win32;
 
 namespace wesh
 {
@@ -27,6 +28,7 @@ namespace wesh
 
         public const double Version = 0.3;
         public const string VersionStr = "WESH v0.4 [10.03.2023]";
+        private static readonly Random rand = new Random((int)DateTime.Now.Ticks);
 
         public static Dictionary<string, Command> Commands = new Dictionary<string, Command>()
         {
@@ -130,11 +132,11 @@ namespace wesh
                 return r;
             } },
 
-            {"loop", (args)=>{
+            {"for", (args)=>{
                 string r = "";
                 for(int i = ToInt(args[1]); i < ToInt(args[2]); i++)
                 {
-                    r += ExecSub(args[3].Replace($"@{{{args[0]}}}", i.ToString()))+"\n";
+                    r += ExecSub(args[3].Replace($"@{args[0]}", i.ToString()))+"\n";
                 }
                 return r;
             } },
@@ -262,17 +264,26 @@ namespace wesh
             {"requestAdminPriv", (args)=>{
                 if(!(new WindowsPrincipal(WindowsIdentity.GetCurrent()).IsInRole(WindowsBuiltInRole.Administrator)))
                 {
-                    var bargs = Environment.GetCommandLineArgs().Skip<string>(1).ToArray<string>();
-                    if(bargs[0] == "-s") bargs[1] = GetPath(bargs[1]);
-
                     var p = new Process();
                     p.StartInfo.FileName = Process.GetCurrentProcess().MainModule.FileName;
-                    p.StartInfo.Arguments = "\"" + String.Join("\" \"", bargs) + "\"";
                     p.StartInfo.Verb = "RunAs";
+
+                    var aargs = Environment.GetCommandLineArgs();
+                    if(aargs.Length > 1)
+                    {
+                        var bargs = aargs.Skip(1).ToArray();
+                        if(bargs[0] == "-s") bargs[1] = GetPath(bargs[1]);
+                        p.StartInfo.Arguments = "\"" + String.Join("\" \"", bargs) + "\"";
+                    }
+
                     p.Start();
                     Environment.Exit(0);
                 }
                 return "";
+            } },
+
+            {"rand", (args)=>{
+                return rand.Next(ToInt(args[0]), ToInt(args[1])).ToString();
             } },
 
             {"cmd.list", (args)=>{
@@ -311,6 +322,70 @@ namespace wesh
                 return "";
             } },
 
+            {"fs.copyFile", (args)=>{
+                File.Copy(GetPath(args[0]), GetPath(args[1]));
+                return "";
+            } },
+
+            {"fs.moveFile", (args)=>{
+                File.Move(GetPath(args[0]), GetPath(args[1]));
+                return "";
+            } },
+
+            {"fs.deleteFile", (args)=>{
+                File.Delete(GetPath(args[0]));
+                return "";
+            } },
+
+            {"fs.fileExists", (args)=>{
+                return BoolToString(File.Exists(GetPath(args[0])));
+            } },
+
+            {"fs.fileInfo", (args)=>{
+                var f = new FileInfo(GetPath(args[0]));
+                return CreateObject(new Dictionary<string, string>()
+                {
+                    {"name", f.Name },
+                    {"fullName", f.FullName },
+                    {"ext", f.Extension },
+                    {"size", f.Length.ToString() },
+                    {"lastWriteTime", f.LastWriteTime.ToString() },
+                    {"lastAccessTime", f.LastAccessTime.ToString() },
+                    {"creationTime", f.CreationTime.ToString() },
+                    {"dir", f.DirectoryName },
+                    {"isReadOnly", BoolToString(f.IsReadOnly) }
+                });
+            } },
+
+            {"fs.createDir", (args)=>{
+                Directory.CreateDirectory(GetPath(args[0]));
+                return "";
+            } },
+
+            {"fs.moveDir", (args)=>{
+                Directory.Move(GetPath(args[0]), GetPath(args[1]));
+                return "";
+            } },
+
+            {"fs.deleteDir", (args)=>{
+                Directory.Delete(GetPath(args[0]));
+                return "";
+            } },
+
+            {"fs.dirInfo", (args)=>{
+                var d = new DirectoryInfo(GetPath(args[0]));
+                return CreateObject(new Dictionary<string, string>()
+                {
+                    {"name", d.Name },
+                    {"fullName", d.FullName },
+                    {"lastWriteTime", d.LastWriteTime.ToString() },
+                    {"lastAccessTime", d.LastAccessTime.ToString() },
+                    {"creationTime", d.CreationTime.ToString() },
+                    {"parentDir", d.Parent.FullName },
+                    {"rootDir", d.Root.FullName }
+                });
+            } },
+
             {"fs.listDir", (args)=>{
                 string p = GetPath(args.Length > 0?args[0]:".");
                 string mode = args.Length > 1?args[1]:"";
@@ -327,9 +402,52 @@ namespace wesh
                 return String.Join(Environment.NewLine, list);
             } },
 
-            {"hideConsole", (args)=>{
-                Process.GetCurrentProcess().StartInfo.WindowStyle = ProcessWindowStyle.Hidden;
+            {"reg.create", (args)=>{
+                var key = GetRegistryKey(args[0], true);
+                key.CreateSubKey(args[1]);
+                key.Close();
                 return "";
+            } },
+
+            {"reg.write", (args)=>{
+                var key = GetRegistryKey(args[0], true);
+                key.SetValue(args[1], args[2]);
+                key.Close();
+                return "";
+            } },
+
+            {"reg.read", (args)=>{
+                var key = GetRegistryKey(args[0], false);
+                var val = key.GetValue(args[1]);
+                key.Close();
+
+                string s = (val is bool)?BoolToString((bool)val):val.ToString();
+                return s;
+            } },
+
+            {"reg.delete", (args)=>{
+                var key = GetRegistryKey(args[0], true);
+                key.DeleteValue(args[1]);
+                key.Close();
+                return "";
+            } },
+
+            {"reg.deleteKey", (args)=>{
+                var key = GetRegistryKey(args[0], true);
+                key.DeleteSubKey(args[1]);
+                key.Close();
+                return "";
+            } },
+
+            {"reg.list", (args)=>{
+                List<string> l = new List<string>();
+
+                var key = GetRegistryKey(args[0], false);
+                l.AddRange(key.GetSubKeyNames());
+                l.AddRange(key.GetValueNames());
+                key.Close();
+
+                return String.Join(Environment.NewLine, l);
             } },
 
             {"obj.create", (args)=>{
@@ -346,6 +464,15 @@ namespace wesh
 
             {"obj.listKeys", (args)=>{
                 return String.Join(Environment.NewLine, UserObjects[args[0]].Keys);
+            } },
+
+            {"obj.getData", (args)=>{
+                string ret = "";
+                foreach(KeyValuePair<string, string> pair in UserObjects[args[0]])
+                {
+                    ret += pair.Key + ": " + pair.Value + Environment.NewLine;
+                }
+                return ret;
             } },
 
             {"obj.get", (args)=>{
@@ -483,18 +610,27 @@ namespace wesh
                 if(button == "left")
                 {
                     mouse_event(0x2, 0, 0, 0, 0);
-                    Thread.Sleep(delay);
-                    mouse_event(0x4, 0, 0, 0, 0);
+                    if(delay != 0)
+                    {
+                        Thread.Sleep(delay);
+                        mouse_event(0x4, 0, 0, 0, 0);
+                    }
                 }else if(button == "right")
                 {
                     mouse_event(0x8, 0, 0, 0, 0);
-                    Thread.Sleep(delay);
-                    mouse_event(0x10, 0, 0, 0, 0);
+                    if(delay != 0)
+                    {
+                        Thread.Sleep(delay);
+                        mouse_event(0x10, 0, 0, 0, 0);
+                    }
                 }else if(button == "middle")
                 {
                     mouse_event(0x20, 0, 0, 0, 0);
-                    Thread.Sleep(delay);
-                    mouse_event(0x40, 0, 0, 0, 0);
+                    if(delay != 0)
+                    {
+                        Thread.Sleep(delay);
+                        mouse_event(0x40, 0, 0, 0, 0);
+                    }
                 }
 
                 return "";
@@ -536,7 +672,6 @@ namespace wesh
 
         public static string GetRandomName()
         {
-            var rand = new Random();
             string cs = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
 
             char[] chars = new char[30];
@@ -546,6 +681,55 @@ namespace wesh
             }
 
             return new String(chars);
+        }
+
+        public static RegistryKey GetRegistryKey(string keyName, bool write)
+        {
+            string[] k = keyName.Split('\\');
+            RegistryKey mKey;
+            switch (k[0])
+            {
+                case "HKLM":
+                case "HKEY_LOCAL_MACHINE":
+                    mKey = Registry.LocalMachine;
+                    break;
+
+                case "HKCR":
+                case "HKEY_CLASSES_ROOT":
+                    mKey = Registry.ClassesRoot;
+                    break;
+
+                case "HKCU":
+                case "HKEY_CURRENT_USER":
+                    mKey = Registry.CurrentUser;
+                    break;
+
+                case "HKU":
+                case "HKEY_USERS":
+                    mKey = Registry.Users;
+                    break;
+
+                case "HKCC":
+                case "HKEY_CURRENT_CONFIG":
+                    mKey = Registry.CurrentConfig;
+                    break;
+
+                default:
+                    mKey = null;
+                    break;
+            }
+            k = k.Skip(1).ToArray();
+
+            var key = mKey.OpenSubKey(String.Join("\\", k), write);
+
+            return key;
+        }
+
+        public static string CreateObject(Dictionary<string, string> dict)
+        {
+            string name = GetRandomName();
+            UserObjects.Add(name, dict);
+            return name;
         }
 
         public static string GetRequest(string url)
@@ -642,11 +826,10 @@ wesh [-v] [-h] [-c <команда>] -[f <файл>]
             }
         }
 
-        public static bool? StringToBool(string s)
+        public static bool StringToBool(string s)
         {
-            if(s == "true") return true;
-            if(s == "false") return false;
-            return null;
+            if(s.ToLower() == "true") return true;
+            return false;
         }
 
         public static string BoolToString(bool b)
@@ -673,7 +856,7 @@ wesh [-v] [-h] [-c <команда>] -[f <файл>]
 
         public static bool Cond(string expr)
         {
-            return (bool)StringToBool(EvalJS(expr));
+            return StringToBool(EvalJS(expr));
         }
 
         public static string ToBase64(string s)
@@ -732,7 +915,7 @@ wesh [-v] [-h] [-c <команда>] -[f <файл>]
 
             cmd = Regex.Replace(cmd, @"{([^{]*){", new MatchEvaluator((m) =>
             {
-                return m.Groups[1].Value.Replace("\\;", ";").Replace("'", "$Q1").Replace("\"", "$Q2").Replace(" ", "$SP").Replace(",", "$CM").Replace("@", "$AT").Replace("&", "$AM");
+                return m.Groups[1].Value.Replace("\\;", ";").Replace("'", "$Q1").Replace("\"", "$Q2").Replace(" ", "$SP").Replace(",", "$CM").Replace("@", "$AT").Replace("&", "$AM").Replace("%", "$PR");
             }));
             cmd = Regex.Replace(cmd, @"'([^']*)'", new MatchEvaluator((m) => {
                 return m.Groups[1].Value.Replace("\"", "$Q2").Replace(" ", "$SP").Replace(",", "$CM");
@@ -765,6 +948,7 @@ wesh [-v] [-h] [-c <команда>] -[f <файл>]
                 arg = arg.Replace("$Q1", "'");
                 arg = arg.Replace("$Q2", "\"");
                 arg = arg.Replace("$Q3", "{");
+                arg = arg.Replace("$PR", "%");
 
                 MatchCollection vMatches = new Regex(@"@[a-zA-Z_\.]+").Matches(arg);
                 if (vMatches.Count > 0)
@@ -787,20 +971,36 @@ wesh [-v] [-h] [-c <команда>] -[f <файл>]
                     }
                 }
 
-                MatchCollection eMatches = new Regex(@"\&\[[^\]]+\]").Matches(arg);
+                MatchCollection eMatches = new Regex(@"\&\([^)]+\)").Matches(arg);
                 if (eMatches.Count > 0)
                 {
-                    foreach (Match m in eMatches)
+                    foreach (Match em in eMatches)
                     {
-                        string val = m.Value;
-                        val = val.Replace("&[", "").Replace("]", "");
-                        arg = arg.Replace(m.Value, Exec(val));
+                        string val = em.Value;
+                        val = val.Replace("&(", "").Replace(")", "");
+                        arg = arg.Replace(em.Value, Exec(val));
                     }
                 }
 
-                if (arg[0] == '&' && arg[1] != '[')
+                if (arg[0] == '&' && arg[1] != '(')
                 {
                     arg = Exec(arg.Substring(1));
+                }
+
+                MatchCollection mMatches = new Regex(@"%\([^)]+\)").Matches(arg);
+                if (mMatches.Count > 0)
+                {
+                    foreach (Match mm in mMatches)
+                    {
+                        string val = mm.Value;
+                        val = val.Replace("%(", "").Replace(")", "");
+                        arg = arg.Replace(mm.Value, EvalJS(val));
+                    }
+                }
+
+                if (arg[0] == '%' && arg[1] != '(')
+                {
+                    arg = EvalJS(arg.Substring(1));
                 }
 
                 arg = arg.Replace("$AM", "&").Replace("$AT", "@");
