@@ -28,6 +28,7 @@ namespace wesh
 
         public const double Version = 0.3;
         public const string VersionStr = "WESH v0.4 [10.03.2023]";
+        public static readonly string WeshDir = new FileInfo(Process.GetCurrentProcess().MainModule.FileName).Directory.FullName;
         private static readonly Random rand = new Random((int)DateTime.Now.Ticks);
 
         public static Dictionary<string, Command> Commands = new Dictionary<string, Command>()
@@ -41,6 +42,7 @@ namespace wesh
             } },
 
             {"set", (args)=>{
+                if(Constants.Contains(args[0])) throw new Exception(args[0] + " является константой.");
                 if (args[0].Contains('.'))
                 {
                     string[] sp = args[0].Split('.');
@@ -69,6 +71,7 @@ namespace wesh
             } },
 
             {"sete", (args)=>{
+                if(Constants.Contains(args[0])) throw new Exception(args[0] + " является константой.");
                 if (args[0].Contains('.'))
                 {
                     string[] sp = args[0].Split('.');
@@ -96,8 +99,22 @@ namespace wesh
                 return "";
             } },
 
+            {"const", (args)=>{
+                Constants.AddRange(args);
+                return "";
+            } },
+
             {"exit", (args)=>{
                 Environment.Exit((args.Length > 0?ToInt(args[0]):0));
+                return "";
+            } },
+
+            {"exec", (args)=>{
+                return ExecSub(args[0]);
+            } },
+
+            {"load", (args)=>{
+                ExecScript(File.ReadAllText(Variables["modulesDir"] + "\\" + args[0] + ".weshm"));
                 return "";
             } },
 
@@ -210,7 +227,7 @@ namespace wesh
 
             {"cd", (args)=>{
                 if(Directory.Exists(GetPath(args[0]))){
-                    Variables["currdir"] = GetPath(args[0]);
+                    Variables["currDir"] = GetPath(args[0]);
                     return "";
                 }
                 return $"Папка \"{GetPath(args[0])}\" не найдена.";
@@ -290,7 +307,7 @@ namespace wesh
                 return String.Join(Environment.NewLine, Commands.Keys.ToArray());
             } },
 
-            {"cmd.add", (args)=>{
+            {"cmd.fromFunc", (args)=>{
                 if(!Functions.ContainsKey(args[1])) return "";
                 Command func = (a)=>{
                     var al = a.ToList();
@@ -300,6 +317,11 @@ namespace wesh
 
                 if (Commands.ContainsKey(args[0])) Commands[args[0]] = func;
                 else Commands.Add(args[0], func);
+                return "";
+            } },
+
+            {"cmd.alias", (args)=>{
+                Commands.Add(args[0], Commands[args[1]]);
                 return "";
             } },
 
@@ -402,7 +424,7 @@ namespace wesh
                 return String.Join(Environment.NewLine, list);
             } },
 
-            {"reg.create", (args)=>{
+            {"reg.createKey", (args)=>{
                 var key = GetRegistryKey(args[0], true);
                 key.CreateSubKey(args[1]);
                 key.Close();
@@ -451,10 +473,30 @@ namespace wesh
             } },
 
             {"obj.create", (args)=>{
-                string name = GetRandomName();
-                UserObjects.Add(name, new Dictionary<string, string>());
-                Commands["set"](new string[]{ args[0], name });
-                return name;
+                string name = CreateObject(new Dictionary<string, string>());
+                Variables.Add(args[0], name);
+                return "";
+            } },
+
+            {"obj.save", (args)=>{
+                string text = args[0] + Environment.NewLine;
+                foreach(KeyValuePair<string, string> kvp in UserObjects[args[0]])
+                {
+                    text += kvp.Key + "=" + kvp.Value + Environment.NewLine;
+                }
+                File.WriteAllText(GetPath(args[1]), text);
+                return "";
+            } },
+
+            {"obj.load", (args)=>{
+                Dictionary<string, string> dict = new Dictionary<string, string>();
+                foreach(string line in File.ReadAllLines(GetPath(args[0])))
+                {
+                    if(line.Trim().Length == 0 || !line.Contains('=')) continue;
+                    var sp = line.Split(new char[]{'='}, 2);
+                    dict.Add(sp[0], sp[1]);
+                }
+                return CreateObject(dict);
             } },
 
             {"obj.createN", (args)=>{
@@ -462,7 +504,7 @@ namespace wesh
                 return "";
             } },
 
-            {"obj.listKeys", (args)=>{
+            {"obj.getKeys", (args)=>{
                 return String.Join(Environment.NewLine, UserObjects[args[0]].Keys);
             } },
 
@@ -500,6 +542,17 @@ namespace wesh
                 return ret;
             } },
 
+            {"module.install", (args)=>{
+                string addr = Variables["modulesUrl"].Replace("MODULE_NAME", args[0]);
+                new WebClient().DownloadFile(addr, Variables["modulesDir"] + "\\" + args[0] + ".weshm");
+                return "";
+            } },
+
+            {"module.uninstall", (args)=>{
+                File.Delete(Variables["modulesDir"] + "\\" + args[0] + ".weshm");
+                return "";
+            } },
+
             {"hotkey.set", (args)=>{
                 HotKey.SetHotKey(args[0], false, () =>
                 {
@@ -532,7 +585,7 @@ namespace wesh
             } },
 
             {"http.server", (args)=>{
-                ServeFolder(args[0], ToInt(args[1]), false);
+                ServeFolder(GetPath(args[0]), ToInt(args[1]), false);
                 return "";
             } },
 
@@ -656,21 +709,30 @@ namespace wesh
 
         public static Dictionary<string, string> Variables = new Dictionary<string, string>()
         {
-            { "currdir", Environment.CurrentDirectory }
+            { "weshDir", WeshDir },
+            { "currDir", Environment.CurrentDirectory },
+            { "null", "__WESH_NULL" },
+            { "error", "" },
+            { "modulesDir", WeshDir + "\\modules" },
+            { "modulesUrl", "https://nekit270ch.github.io/wesh-modules/MODULE_NAME.weshm" },
         };
 
-        public static Dictionary<string, object> Objects = new Dictionary<string, object>();
+        public static List<string> Constants = new List<string>()
+        {
+            "weshDir", "null"
+        };
+
         public static Dictionary<string, Dictionary<string, string>> UserObjects = new Dictionary<string, Dictionary<string, string>>();
         public static Dictionary<string, string> Functions = new Dictionary<string, string>();
 
-        public static string GetPath(string p)
+        private static string GetPath(string p)
         {
             if (p.Length == 0) p = ".";
-            Environment.CurrentDirectory = Variables["currdir"];
+            Environment.CurrentDirectory = Variables["currDir"];
             return Path.IsPathRooted(p) ? p : Path.GetFullPath(p);
         }
 
-        public static string GetRandomName()
+        private static string GetRandomName()
         {
             string cs = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
 
@@ -683,7 +745,7 @@ namespace wesh
             return new String(chars);
         }
 
-        public static RegistryKey GetRegistryKey(string keyName, bool write)
+        private static RegistryKey GetRegistryKey(string keyName, bool write)
         {
             string[] k = keyName.Split('\\');
             RegistryKey mKey;
@@ -727,12 +789,12 @@ namespace wesh
 
         public static string CreateObject(Dictionary<string, string> dict)
         {
-            string name = GetRandomName();
+            string name = "__WESH_OBJECT_"+GetRandomName();
             UserObjects.Add(name, dict);
             return name;
         }
 
-        public static string GetRequest(string url)
+        private static string GetRequest(string url)
         {
             var req = WebRequest.Create(url);
 
@@ -743,7 +805,7 @@ namespace wesh
             return str;
         }
 
-        public static string PostRequest(string url, string data)
+        private static string PostRequest(string url, string data)
         {
             var req = WebRequest.Create(url);
 
@@ -765,7 +827,7 @@ namespace wesh
         public static void HelpMessage()
         {
             Console.WriteLine(@"
-wesh [-v] [-h] [-c <команда>] -[f <файл>]
+wesh [-v] [-h] [-c <команда>] [-f <файл>]
 
         [-v]            Выводит версию WESH.
         [-h]            Выводит справочное сообщение.
@@ -774,14 +836,14 @@ wesh [-v] [-h] [-c <команда>] -[f <файл>]
 ");
         }
 
-        public static bool Match(string s, string r)
+        private static bool Match(string s, string r)
         {
             Regex regex = new Regex(r);
             MatchCollection matches = regex.Matches(s);
             return (matches.Count > 0);
         }
 
-        public static void ServeFolder(string folder, int port, bool q)
+        private static void ServeFolder(string folder, int port, bool q)
         {
             HttpListener server = new HttpListener();
             server.Prefixes.Add($"http://127.0.0.1:{port}/");
@@ -826,18 +888,18 @@ wesh [-v] [-h] [-c <команда>] -[f <файл>]
             }
         }
 
-        public static bool StringToBool(string s)
+        private static bool StringToBool(string s)
         {
             if(s.ToLower() == "true") return true;
             return false;
         }
 
-        public static string BoolToString(bool b)
+        private static string BoolToString(bool b)
         {
             return b ? "true" : "false";
         }
 
-        public static int ToInt(string s)
+        private static int ToInt(string s)
         {
             try
             {
@@ -849,17 +911,17 @@ wesh [-v] [-h] [-c <команда>] -[f <файл>]
             }
         }
 
-        public static string EvalJS(string expr)
+        private static string EvalJS(string expr)
         {
             return Eval.JScriptEvaluate(expr, Microsoft.JScript.Vsa.VsaEngine.CreateEngine()).ToString();
         }
 
-        public static bool Cond(string expr)
+        private static bool Cond(string expr)
         {
             return StringToBool(EvalJS(expr));
         }
 
-        public static string ToBase64(string s)
+        private static string ToBase64(string s)
         {
             try
             {
@@ -873,7 +935,7 @@ wesh [-v] [-h] [-c <команда>] -[f <файл>]
             
         }
 
-        public static string FromBase64(string s)
+        private static string FromBase64(string s)
         {
             try
             {
@@ -888,6 +950,8 @@ wesh [-v] [-h] [-c <команда>] -[f <файл>]
 
         public static string Exec(string cmd)
         {
+            Variables["error"] = Variables["null"];
+
             List<string> args = new List<string>();
 
             if (cmd.Trim().Length == 0) return "";
@@ -938,17 +1002,32 @@ wesh [-v] [-h] [-c <команда>] -[f <файл>]
                 args.RemoveAt(0);
             }
 
-            if (!Commands.ContainsKey(cmd)) return $"ОШИБКА: Команда {cmd} не найдена.";
+            if (!Commands.ContainsKey(cmd))
+            {
+                string msg = $"ОШИБКА: Команда {cmd} не найдена."; ;
+                Variables["error"] = msg;
+                return msg;
+            }
 
             for (int j = 0; j < args.Count; j++)
             {
                 string arg = args[j];
+
+                if (arg.Trim().Length == 0) continue;
+
                 arg = arg.Replace("$SP", " ");
                 arg = arg.Replace("$CM", ",");
                 arg = arg.Replace("$Q1", "'");
                 arg = arg.Replace("$Q2", "\"");
                 arg = arg.Replace("$Q3", "{");
                 arg = arg.Replace("$PR", "%");
+
+                if (arg.StartsWith("~"))
+                {
+                    arg = arg.Substring(1);
+                    args[j] = arg;
+                    continue;
+                }
 
                 MatchCollection vMatches = new Regex(@"@[a-zA-Z_\.]+").Matches(arg);
                 if (vMatches.Count > 0)
@@ -964,9 +1043,20 @@ wesh [-v] [-h] [-c <команда>] -[f <файл>]
                             {
                                 arg = arg.Replace(m.Value, UserObjects[Variables[sp[0]]][sp[1]]);
                             }
+                            else
+                            {
+                                Variables["error"] = $"ОШИБКА: Переменная {val} не найдена.";
+                                arg = arg.Replace(m.Value, Variables["null"]);
+
+                            }
                         }else if (Variables.ContainsKey(val))
                         {
                             arg = arg.Replace(m.Value, Variables[val]);
+                        }
+                        else
+                        {
+                            Variables["error"] = $"ОШИБКА: Переменная {val} не найдена.";
+                            arg = arg.Replace(m.Value, Variables["null"]);
                         }
                     }
                 }

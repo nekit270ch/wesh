@@ -7,11 +7,16 @@ namespace wesh
     {
         static void Main(string[] args)
         {
+            if(!Directory.Exists(WESH.WeshDir + "\\modules"))
+            {
+                Directory.CreateDirectory(WESH.WeshDir + "\\modules");
+            }
+
             if (args.Length == 0)
             {
                 while (true)
                 {
-                    Console.Write($"wesh [{WESH.Variables["currdir"]}] > ");
+                    Console.Write($"wesh [{WESH.Variables["currDir"]}] > ");
                     Console.WriteLine(WESH.Exec(Console.ReadLine()));
                 }
             }
