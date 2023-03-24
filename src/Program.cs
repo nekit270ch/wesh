@@ -7,9 +7,9 @@ namespace wesh
     {
         static void Main(string[] args)
         {
-            if(!Directory.Exists(WESH.WeshDir + "\\modules"))
+            if(!Directory.Exists(WESH.Variables["modulesDir"]))
             {
-                Directory.CreateDirectory(WESH.WeshDir + "\\modules");
+                Directory.CreateDirectory(WESH.Variables["modulesDir"]);
             }
 
             if (args.Length == 0)
