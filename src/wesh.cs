@@ -43,31 +43,7 @@ namespace wesh
             } },
 
             {"set", (args)=>{
-                if(Constants.Contains(args[0])) throw new Exception(args[0] + " является константой.");
-                if (args[0].Contains('.'))
-                {
-                    string[] sp = args[0].Split('.');
-                    if(!Variables.ContainsKey(sp[0]) || !UserObjects.ContainsKey(Variables[sp[0]])) return "ОШИБКА: Объект не найден.";
-                    if (UserObjects[Variables[sp[0]]].ContainsKey(sp[1]))
-                    {
-                        UserObjects[Variables[sp[0]]][sp[1]] = args[1];
-                    }
-                    else
-                    {
-                        UserObjects[Variables[sp[0]]].Add(sp[1], args[1]);
-                    }
-                }
-                else
-                {
-                    if (Variables.ContainsKey(args[0]))
-                    {
-                        Variables[args[0]] = args[1];
-                    }
-                    else
-                    {
-                        Variables.Add(args[0], args[1]);
-                    }
-                }
+                SetVariable(args[0], args[1]);
                 return "";
             } },
 
@@ -114,7 +90,7 @@ namespace wesh
             } },
 
             {"var.set", (args)=>{
-                Commands["set"](args);
+                SetVariable(args[0], args[1]);
                 return "";
             } },
 
@@ -135,9 +111,16 @@ namespace wesh
             {"load", (args)=>{
                 foreach(string arg in args)
                 {
-                    string name = Variables["modulesDir"] + "\\" + args[0] + ".weshm";
-                    if(!File.Exists(name)) Commands["module.install"](args);
-                    ExecScript(File.ReadAllText(name));
+                    string code = "";
+                    if(GetPath(arg) != null) code = File.ReadAllText(GetPath(arg));
+                    else if(arg.StartsWith("http")) code = new WebClient().DownloadString(arg);
+                    else
+                    {
+                        string name = Variables["modulesDir"] + "\\" + args[0] + ".weshm";
+                        if(!File.Exists(name)) Commands["module.install"](args);
+                        code = File.ReadAllText(name);
+                    }
+                    ExecScript(code);
                 }
                 return "";
             } },
@@ -362,6 +345,14 @@ namespace wesh
                 return Regex.IsMatch(args[0], args[1])?"true":"false";
             } },
 
+            {"str.equals", (args)=>{
+                return BoolToString(args[0].Equals(args[1]));
+            } },
+
+            {"str.indexOf", (args)=>{
+                return args[0].IndexOf(args[1]).ToString();
+            } },
+
             {"fs.readFile", (args)=>{
                 string p = GetPath(args[0]);
                 if(!File.Exists(p)) return $"Файл \"{p}\" не найден.";
@@ -571,6 +562,85 @@ namespace wesh
                 return ret;
             } },
 
+            {"arr.create", (args)=>{
+                return CreateArray(args);
+            } },
+
+            {"arr.get", (args)=>{
+                return UserObjects[args[0]][args[1]];
+            } },
+
+            {"arr.set", (args)=>{
+                UserObjects[args[0]][args[1]] = args[2];
+                return "";
+            } },
+
+            {"arr.push", (args)=>{
+                var arr = UserObjects[args[0]];
+                var len = ToInt(arr["length"]);
+
+                len++;
+                arr.Add((len-1).ToString(), args[1]);
+                arr["length"] = len.ToString();
+
+                return len.ToString();
+            } },
+
+            {"arr.pop", (args)=>{
+                var arr = UserObjects[args[0]];
+                var len = ToInt(arr["length"]);
+
+                len--;
+                var e = arr[len.ToString()];
+                arr.Remove(len.ToString());
+                arr["length"] = len.ToString();
+
+                return e;
+            } },
+
+            {"arr.shift", (args)=>{
+                var arr = UserObjects[args[0]];
+                var fel = arr["0"];
+                var len = ToInt(arr["length"]);
+
+                var vals = arr.ToDictionary(e=>e.Key, e=>e.Value);
+                arr.Clear();
+
+                for(int i = 1; i < len; i++)
+                {
+                    arr.Add((i-1).ToString(), vals[i.ToString()]);
+                }
+                arr.Add("length", (len-1).ToString());
+
+                return fel;
+            } },
+
+            {"arr.insert", (args)=>{
+                var arr = UserObjects[args[0]];
+                var len = ToInt(arr["length"]);
+
+                var vals = arr.ToDictionary(e=>e.Key, e=>e.Value);
+                arr.Clear();
+
+                for(int i = 0; i < len; i++)
+                {
+                    Console.WriteLine($"{i}");
+                    if(i == ToInt(args[1])){
+                        arr.Add(i.ToString(), args[2]);
+                        arr.Add((i+1).ToString(), vals[i.ToString()]);
+                        //i++;
+                    }
+                    else
+                    {
+                        arr.Add(i.ToString(), vals[i.ToString()]);
+                    }
+                }
+
+                arr.Add("length", (len+1).ToString());
+
+                return args[2];
+            } },
+
             {"module.install", (args)=>{
                 string addr = Variables["modulesUrl"].Replace("MODULE_NAME", args[0]);
                 new WebClient().DownloadFile(addr, Variables["modulesDir"] + "\\" + args[0] + ".weshm");
@@ -742,11 +812,21 @@ namespace wesh
             {"lang.set", (args)=>{
                 Lang[args[0]] = args[1];
                 return "";
+            } },
+
+            {"lang.list", (args)=>{
+                string r = "";
+                foreach(KeyValuePair<string, string> kvp in Lang)
+                {
+                    r += $"{kvp.Key}: {kvp.Value}{Environment.NewLine}";
+                }
+                return r;
             } }
         };
 
         public static Dictionary<string, string> Lang = new Dictionary<string, string>()
         {
+            { "comment", "#" },
             { "cmdDelim", ";" },
             { "argsDelim", "," },
             { "objectDelim", "." },
@@ -780,11 +860,76 @@ namespace wesh
         public static Dictionary<string, Dictionary<string, string>> UserObjects = new Dictionary<string, Dictionary<string, string>>();
         public static Dictionary<string, string> Functions = new Dictionary<string, string>();
 
+        private static string GetLangEl(string la)
+        {
+            string l = Lang[la];
+            if (@"[]\^$.|?*+()".Contains(l))
+            {
+                return "\\" + l;
+            }
+            return l;
+        }
+
+        public static string GetVariable(string name)
+        {
+            if (name.Contains(Lang["objectDelim"]))
+            {
+                string[] sp = name.Split(Lang["objectDelim"][0]);
+                if (Variables.ContainsKey(sp[0]) && UserObjects.ContainsKey(Variables[sp[0]]) && UserObjects[Variables[sp[0]]].ContainsKey(sp[1]))
+                {
+                    return UserObjects[Variables[sp[0]]][sp[1]];
+                }
+                else
+                {
+                    return WeshNull;
+                }
+            }
+            else if (Variables.ContainsKey(name))
+            {
+                return Variables[name];
+            }
+            else
+            {
+                return WeshNull;
+            }
+        }
+
+        public static void SetVariable(string name, string value)
+        {
+            if (Constants.Contains(name)) throw new Exception(name + " является константой.");
+            if (name.Contains('.'))
+            {
+                string[] sp = name.Split('.');
+                if (!Variables.ContainsKey(sp[0]) || !UserObjects.ContainsKey(Variables[sp[0]])) throw new Exception("Объект не найден.");
+                if (UserObjects[Variables[sp[0]]].ContainsKey(sp[1]))
+                {
+                    UserObjects[Variables[sp[0]]][sp[1]] = value;
+                }
+                else
+                {
+                    UserObjects[Variables[sp[0]]].Add(sp[1], value);
+                }
+            }
+            else
+            {
+                if (Variables.ContainsKey(name))
+                {
+                    Variables[name] = value;
+                }
+                else
+                {
+                    Variables.Add(name, value);
+                }
+            }
+        }
+
         private static string GetPath(string p)
         {
             if (p.Length == 0) p = ".";
             Environment.CurrentDirectory = Variables["currDir"];
-            return Path.IsPathRooted(p) ? p : Path.GetFullPath(p);
+            string path = Path.IsPathRooted(p) ? p : Path.GetFullPath(p);
+            if(File.Exists(path) || Directory.Exists(path)) return path;
+            return null;
         }
 
         private static string GetRandomName()
@@ -847,6 +992,22 @@ namespace wesh
             string name = "__WESH_OBJECT_"+GetRandomName();
             UserObjects.Add(name, dict);
             return name;
+        }
+
+        public static string CreateArray(string[] values)
+        {
+            var dict = new Dictionary<string, string>();
+            var i = 0;
+
+            foreach (string el in values)
+            {
+                dict.Add(i.ToString(), el);
+                i++;
+            }
+
+            dict.Add("length", i.ToString());
+
+            return CreateObject(dict);
         }
 
         private static string GetRequest(string url)
@@ -968,7 +1129,15 @@ wesh [-v] [-h] [-c <команда>] [-f <файл>]
 
         private static string EvalJS(string expr)
         {
-            return Eval.JScriptEvaluate(expr, Microsoft.JScript.Vsa.VsaEngine.CreateEngine()).ToString();
+            try
+            {
+                return Eval.JScriptEvaluate(expr, Microsoft.JScript.Vsa.VsaEngine.CreateEngine()).ToString();
+            }
+            catch (Exception)
+            {
+                return expr;
+            }
+            
         }
 
         private static bool Cond(string expr)
@@ -987,7 +1156,6 @@ wesh [-v] [-h] [-c <команда>] [-f <файл>]
             {
                 return s;
             }
-            
         }
 
         private static string FromBase64(string s)
@@ -1005,15 +1173,13 @@ wesh [-v] [-h] [-c <команда>] [-f <файл>]
 
         public static string Exec(string cmd)
         {
-            Variables["error"] = WeshNull;
-
             List<string> args = new List<string>();
 
             if (cmd.Trim().Length == 0) return "";
 
-            cmd = cmd.Replace("$SM", Lang["cmdDelim"]);
+            cmd = cmd.Replace("$SM", GetLangEl("cmdDelim"));
 
-            Regex rgx = new Regex(@"[^\\]{1}" + Lang["cmdDelim"]);
+            Regex rgx = new Regex(@"[^\\]{1}" + GetLangEl("cmdDelim"));
             MatchCollection mc = rgx.Matches(cmd);
             if (mc.Count > 0)
             {
@@ -1030,21 +1196,21 @@ wesh [-v] [-h] [-c <команда>] [-f <файл>]
                 return r;
             }
 
-            cmd = cmd.Trim().Replace(Lang["codeBlockEnd"], Lang["codeBlockStart"]).Replace("\\"+ Lang["codeBlockStart"], "$Q3");
+            cmd = cmd.Trim().Replace(GetLangEl("codeBlockEnd"), GetLangEl("codeBlockStart")).Replace("\\"+ GetLangEl("codeBlockStart"), "$Q3");
 
-            cmd = Regex.Replace(cmd, "\\" + Lang["codeBlockStart"]+@"([^"+ "\\" + Lang["codeBlockStart"] + @"]*)"+ "\\" + Lang["codeBlockStart"], new MatchEvaluator((m) =>
+            cmd = Regex.Replace(cmd, GetLangEl("codeBlockStart")+@"([^"+ GetLangEl("codeBlockStart") + @"]*)"+ GetLangEl("codeBlockStart"), new MatchEvaluator((m) =>
             {
-                return m.Groups[1].Value.Replace("\\"+ Lang["cmdDelim"], Lang["cmdDelim"]).Replace(Lang["q1"], "$Q1").Replace(Lang["q2"], "$Q2").Replace(" ", "$SP").Replace(Lang["argsDelim"], "$CM").Replace(Lang["varOperator"], "$AT").Replace(Lang["execOperator"], "$AM").Replace(Lang["mathOperator"], "$PR");
+                return m.Groups[1].Value.Replace("\\"+ GetLangEl("cmdDelim"), GetLangEl("cmdDelim")).Replace(GetLangEl("q1"), "$Q1").Replace(GetLangEl("q2"), "$Q2").Replace(" ", "$SP").Replace(GetLangEl("argsDelim"), "$CM").Replace(GetLangEl("varOperator"), "$AT").Replace(GetLangEl("execOperator"), "$AM").Replace(GetLangEl("mathOperator"), "$PR");
             }));
-            cmd = Regex.Replace(cmd, Lang["q1"]+@"([^" + Lang["q1"] + @"]*)" + Lang["q1"], new MatchEvaluator((m) => {
-                return m.Groups[1].Value.Replace(Lang["q2"], "$Q2").Replace(" ", "$SP").Replace(Lang["argsDelim"], "$CM");
+            cmd = Regex.Replace(cmd, GetLangEl("q1")+@"([^" + GetLangEl("q1") + @"]*)" + GetLangEl("q1"), new MatchEvaluator((m) => {
+                return m.Groups[1].Value.Replace(GetLangEl("q2"), "$Q2").Replace(" ", "$SP").Replace(GetLangEl("argsDelim"), "$CM");
             }));
-            cmd = Regex.Replace(cmd, Lang["q2"] + @"([^"+ Lang["q2"] +"]*)" + Lang["q2"], new MatchEvaluator((m) =>
+            cmd = Regex.Replace(cmd, GetLangEl("q2") + @"([^"+ GetLangEl("q2") +"]*)" + GetLangEl("q2"), new MatchEvaluator((m) =>
             {
-                return m.Groups[1].Value.Replace(Lang["q1"], "$Q1").Replace(" ", "$SP").Replace(Lang["argsDelim"], "$CM");
+                return m.Groups[1].Value.Replace(GetLangEl("q1"), "$Q1").Replace(" ", "$SP").Replace(GetLangEl("argsDelim"), "$CM");
             }));
 
-            cmd = cmd.Replace(Lang["argsDelim"], "");
+            cmd = cmd.Replace(GetLangEl("argsDelim"), "");
             args = cmd.Split(' ').ToList();
 
             cmd = args[0];
@@ -1057,13 +1223,6 @@ wesh [-v] [-h] [-c <команда>] [-f <файл>]
                 args.RemoveAt(0);
             }
 
-            if (!Commands.ContainsKey(cmd))
-            {
-                string msg = $"ОШИБКА: Команда {cmd} не найдена."; ;
-                Variables["error"] = msg;
-                return msg;
-            }
-
             for (int j = 0; j < args.Count; j++)
             {
                 string arg = args[j];
@@ -1071,86 +1230,77 @@ wesh [-v] [-h] [-c <команда>] [-f <файл>]
                 if (arg.Trim().Length < 2) continue;
 
                 arg = arg.Replace("$SP", " ");
-                arg = arg.Replace("$CM", Lang["argsDelim"]);
-                arg = arg.Replace("$Q1", Lang["q1"]);
-                arg = arg.Replace("$Q2", Lang["q2"]);
-                arg = arg.Replace("$Q3", Lang["codeBlockStart"]);
-                arg = arg.Replace("$PR", Lang["mathOperator"]);
+                arg = arg.Replace("$CM", GetLangEl("argsDelim"));
+                arg = arg.Replace("$Q1", GetLangEl("q1"));
+                arg = arg.Replace("$Q2", GetLangEl("q2"));
+                arg = arg.Replace("$Q3", GetLangEl("codeBlockStart"));
+                arg = arg.Replace("$PR", GetLangEl("mathOperator"));
 
-                if (arg.StartsWith(Lang["doNotParseOperator"]))
+                if (arg.StartsWith(GetLangEl("doNotParseOperator")))
                 {
                     arg = arg.Substring(1);
                     args[j] = arg;
                     continue;
                 }
 
-                MatchCollection vMatches = new Regex("\\" + Lang["varOperator"] + @"[a-zA-Z_"+ "\\" + Lang["objectDelim"] + "]+").Matches(arg);
+                MatchCollection vMatches = new Regex(GetLangEl("varOperator") + @"[a-zA-Z0-9_"+ GetLangEl("objectDelim") + "]+").Matches(arg);
                 if (vMatches.Count > 0)
                 {
                     foreach (Match m in vMatches)
                     {
                         string val = m.Value;
-                        val = val.Replace(Lang["varOperator"], "");
-                        if (val.Contains(Lang["objectDelim"]))
-                        {
-                            string[] sp = val.Split(Lang["objectDelim"][0]);
-                            if(Variables.ContainsKey(sp[0]) && UserObjects.ContainsKey(Variables[sp[0]]) && UserObjects[Variables[sp[0]]].ContainsKey(sp[1]))
-                            {
-                                arg = arg.Replace(m.Value, UserObjects[Variables[sp[0]]][sp[1]]);
-                            }
-                            else
-                            {
-                                Variables["error"] = $"ОШИБКА: Переменная {val} не найдена.";
-                                arg = arg.Replace(m.Value, WeshNull);
-
-                            }
-                        }else if (Variables.ContainsKey(val))
-                        {
-                            arg = arg.Replace(m.Value, Variables[val]);
-                        }
-                        else
-                        {
-                            Variables["error"] = $"ОШИБКА: Переменная {val} не найдена.";
-                            arg = arg.Replace(m.Value, WeshNull);
-                        }
+                        val = val.Replace(GetLangEl("varOperator"), "");
+                        arg = arg.Replace(m.Value, GetVariable(val));
                     }
                 }
 
-                MatchCollection eMatches = new Regex("\\" + Lang["execOperator"] + "\\" + Lang["operatorBlockStart"] + "[^" + "\\" + Lang["operatorBlockEnd"] + "]+" + "\\" + Lang["operatorBlockEnd"]).Matches(arg);
+                MatchCollection eMatches = new Regex(GetLangEl("execOperator") + GetLangEl("operatorBlockStart") + "[^" + GetLangEl("operatorBlockEnd") + "]+" + GetLangEl("operatorBlockEnd")).Matches(arg);
                 if (eMatches.Count > 0)
                 {
                     foreach (Match em in eMatches)
                     {
                         string val = em.Value;
-                        val = val.Replace(Lang["execOperator"] + Lang["operatorBlockStart"], "").Replace(Lang["operatorBlockEnd"], "");
+                        val = val.Replace(GetLangEl("execOperator") + GetLangEl("operatorBlockStart"), "").Replace(GetLangEl("operatorBlockEnd"), "");
                         arg = arg.Replace(em.Value, Exec(val));
                     }
                 }
 
-                if (arg[0] == Lang["execOperator"][0] && arg[1] != Lang["operatorBlockStart"][0])
+                if (arg[0] == GetLangEl("execOperator")[0] && arg[1] != GetLangEl("operatorBlockStart")[0])
                 {
                     arg = Exec(arg.Substring(1));
                 }
 
-                MatchCollection mMatches = new Regex("\\" + Lang["mathOperator"] + "\\" + Lang["operatorBlockStart"] + "[^" + "\\" + Lang["operatorBlockEnd"] + "]+" + "\\" + Lang["operatorBlockEnd"]).Matches(arg);
+                MatchCollection mMatches = new Regex(GetLangEl("mathOperator") + GetLangEl("operatorBlockStart") + "[^" + GetLangEl("operatorBlockEnd") + "]+" + GetLangEl("operatorBlockEnd")).Matches(arg);
                 if (mMatches.Count > 0)
                 {
                     foreach (Match mm in mMatches)
                     {
                         string val = mm.Value;
-                        val = val.Replace(Lang["mathOperator"] + Lang["operatorBlockStart"], "").Replace(Lang["operatorBlockEnd"], "");
+                        val = val.Replace(GetLangEl("mathOperator") + GetLangEl("operatorBlockStart"), "").Replace(GetLangEl("operatorBlockEnd"), "");
                         arg = arg.Replace(mm.Value, EvalJS(val));
                     }
                 }
 
-                if (arg[0] == Lang["mathOperator"][0] && arg[1] != Lang["operatorBlockStart"][0])
+                if (arg[0] == GetLangEl("mathOperator")[0] && arg[1] != GetLangEl("operatorBlockStart")[0])
                 {
                     arg = EvalJS(arg.Substring(1));
                 }
 
-                arg = arg.Replace("$AM", Lang["execOperator"]).Replace("$AT", Lang["varOperator"]);
+                arg = arg.Replace("$AM", GetLangEl("execOperator")).Replace("$AT", GetLangEl("varOperator"));
 
                 args[j] = arg;
+            }
+
+            if (!Commands.ContainsKey(cmd))
+            {
+                if(args[0] == "=")
+                {
+                    SetVariable(cmd, args[1]);
+                    return "";
+                }
+                string msg = $"ОШИБКА: Команда {cmd} не найдена."; ;
+                Variables["error"] = msg;
+                return msg;
             }
 
             string ret = "";
@@ -1166,10 +1316,10 @@ wesh [-v] [-h] [-c <команда>] [-f <файл>]
 
         public static string ExecSub(string cmd)
         {
-            cmd = Regex.Replace(cmd, @"^ "+ Lang["cmdDelim"], "");
-            cmd = Regex.Replace(cmd, @"^ \\"+ Lang["cmdDelim"], "");
-            cmd = Regex.Replace(cmd, Lang["cmdDelim"]+@"\s+\\"+ Lang["codeBlockStart"], "\\"+Lang["codeBlockStart"]);
-            cmd = cmd.Replace("\n", "").Replace(Lang["argsDelim"] + " \\" + Lang["codeBlockStart"] + " " + Lang["cmdDelim"], Lang["argsDelim"] + " \\" + Lang["codeBlockStart"] + " ").Replace(Lang["cmdDelim"], "$SM");
+            cmd = Regex.Replace(cmd, @"^ "+ GetLangEl("cmdDelim"), "");
+            cmd = Regex.Replace(cmd, @"^ \\"+ GetLangEl("cmdDelim"), "");
+            cmd = Regex.Replace(cmd, GetLangEl("cmdDelim")+@"\s+\\"+ GetLangEl("codeBlockStart"), "\\"+GetLangEl("codeBlockStart"));
+            cmd = cmd.Replace("\n", "").Replace(GetLangEl("argsDelim") + " \\" + GetLangEl("codeBlockStart") + " " + GetLangEl("cmdDelim"), GetLangEl("argsDelim") + " \\" + GetLangEl("codeBlockStart") + " ").Replace(GetLangEl("cmdDelim"), "$SM");
             return Exec(cmd);
         }
 
@@ -1178,7 +1328,7 @@ wesh [-v] [-h] [-c <команда>] [-f <файл>]
             string output = "";
             rawCode = rawCode.Replace("\r\n", "\n");
             rawCode = rawCode.Replace("\r", "\n");
-            rawCode = rawCode.Replace(" " + Lang["cmdDelim"] + "\n", " \\" + Lang["cmdDelim"] + " ");
+            rawCode = rawCode.Replace(" " + GetLangEl("cmdDelim") + "\n", " \\" + GetLangEl("cmdDelim") + " ");
             string[] code = rawCode.Split('\n');
             foreach (string line in code)
             {
