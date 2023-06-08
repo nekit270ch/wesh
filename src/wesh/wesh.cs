@@ -890,6 +890,8 @@ namespace wesh
                 else if(args[1] == "height") return el.Size.Height.ToString();
                 else if(args[1] == "checked") return BoolToString(((CheckBox)el).Checked);
                 else if(args[1] == "multiline") return BoolToString(((TextBox)el).Multiline);
+                else if(args[1] == "color") return $"{el.ForeColor.R},{el.ForeColor.G},{el.ForeColor.B}";
+                else if(args[1] == "bgcolor") return $"{el.BackColor.R},{el.BackColor.G},{el.BackColor.B}";
 
                 return "";
             } },
@@ -904,6 +906,16 @@ namespace wesh
                 else if(args[1] == "height") el.Size = new Size(el.Size.Width, ToInt(args[2]));
                 else if(args[1] == "checked") ((CheckBox)el).Checked = StringToBool(args[2]);
                 else if(args[1] == "multiline") ((TextBox)el).Multiline = StringToBool(args[2]);
+                else if(args[1] == "color")
+                {
+                    string[] color = args[2].Split(',');
+                    el.ForeColor = Color.FromArgb(ToInt(color[0]), ToInt(color[1]), ToInt(color[2]));
+                }
+                else if(args[1] == "bgcolor")
+                {
+                    string[] color = args[2].Split(',');
+                    el.BackColor = Color.FromArgb(ToInt(color[0]), ToInt(color[1]), ToInt(color[2]));
+                }
 
                 return "";
             } },
