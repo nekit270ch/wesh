@@ -29,50 +29,38 @@ namespace wesh
         private const int WM_KEYUP = 0x0101;
         private static IntPtr _hookID = IntPtr.Zero;
 
-        public static bool FindInList(List<string> list1, List<string> list2)
+        public static IntPtr SetKeyHandler(bool stop, KeyHandlerCallback callback)
         {
-            int mat = 0;
-            List<string> found = new List<string>();
-            if(list1.Count < list2.Count) return false;
+            return SetHook((nCode, wParam, lParam)=>{
+                int vkCode = Marshal.ReadInt32(lParam);
+                string key = ((Keys)vkCode).ToString();
 
-            for(int i = 0; i < list1.Count; i++)
-            {
-                for(int j = 0; j < list2.Count; j++)
-                {
-                    if (!found.Contains(list2[j]) && (list1[i].Length > 1 ? list1[i].Contains(list2[j]) : list1[i] == list2[j]))
-                    {
-                        mat++;
-                        found.Add(list2[j]);
-                    }
-                }
-            }
-            return mat == list2.Count;
+                if(nCode >= 0 && wParam == (IntPtr)WM_KEYDOWN) callback(key);
+
+                return stop?_hookID:CallNextHookEx(_hookID, nCode, wParam, lParam);
+            });
         }
 
-        public static IntPtr SetHotKey(string strKeys, bool stop, HotKeyCallback callback)
+        public static IntPtr SetHotKey(string skey, bool ctrl, bool alt, bool stop, HotKeyCallback callback)
         {
-            /*List<string> inKeys = strKeys.Split('+').ToList();
-            List<string> keys = new List<string>();
-
-            for(int i = 0; i < inKeys.Count; i++)
-            {
-                inKeys[i] = inKeys[i].Replace("Ctrl", "Control").Replace("Alt", "Menu");
-            }*/
+            bool ctrlPressed = false, altPressed = false;
 
             return SetHook((nCode, wParam, lParam)=>{
+                int vkCode = Marshal.ReadInt32(lParam);
+                string key = ((Keys)vkCode).ToString();
+
                 if (nCode >= 0 && wParam == (IntPtr)WM_KEYDOWN)
                 {
-                    int vkCode = Marshal.ReadInt32(lParam);
-                    string key = ((Keys)vkCode).ToString();
-
-                    //keys.Add(key);
-                    //if(keys.Count > inKeys.Count) keys.Clear();
-                    if(key == strKeys)
-                    {
-                        //keys.Clear();
-                        callback();
-                    }
+                    if (key.Contains("ControlKey")) ctrlPressed = true;
+                    if(key.Contains("Menu")) altPressed = true;
+                    else if ((ctrl?ctrlPressed:true) && (alt?altPressed:true) && key == skey) callback();
                 }
+                else if(nCode >= 0 && wParam == (IntPtr)WM_KEYUP)
+                {
+                    if (key.Contains("ControlKey")) ctrlPressed = false;
+                    if (key.Contains("Menu")) altPressed = false;
+                }
+
                 return stop?_hookID:CallNextHookEx(_hookID, nCode, wParam, lParam);
             });
         }
@@ -93,5 +81,6 @@ namespace wesh
 
         private delegate IntPtr LowLevelKeyboardProc(int nCode, IntPtr wParam, IntPtr lParam);
         public delegate void HotKeyCallback();
+        public delegate void KeyHandlerCallback(string key);
     }
 }

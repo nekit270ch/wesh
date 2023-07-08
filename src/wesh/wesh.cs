@@ -25,8 +25,20 @@ namespace wesh
         private static extern bool SetForegroundWindow(IntPtr hWnd);
 
         [DllImport("user32.dll", CharSet = CharSet.Auto, CallingConvention = CallingConvention.StdCall)]
-        public static extern void mouse_event(long dwFlags, long dx, long dy, long cButtons, long dwExtraInfo);
-        
+        private static extern void mouse_event(long dwFlags, long dx, long dy, long cButtons, long dwExtraInfo);
+
+        [DllImport("user32.dll", CharSet = CharSet.Auto, CallingConvention = CallingConvention.StdCall)]
+        private static extern int SendMessage(IntPtr hWnd, int wMsg, int lParam, StringBuilder wParam);
+
+        [DllImport("user32.dll", CharSet = CharSet.Auto, CallingConvention = CallingConvention.StdCall)]
+        private static extern int SendMessage(IntPtr hWnd, int wMsg, int lParam, int wParam);
+
+        [DllImport("user32.dll", CharSet = CharSet.Auto, CallingConvention = CallingConvention.StdCall)]
+        private static extern IntPtr FindWindow(string lpClassName, string lpWindow);
+
+        [DllImport("user32.dll", CharSet = CharSet.Auto, CallingConvention = CallingConvention.StdCall)]
+        private static extern IntPtr FindWindowEx(IntPtr hWndParent, IntPtr hWndhildAfter, string lpClass, string lpWindow);
+
         public const double Version = 0.6;
         public const string VersionStr = "WESH v0.6 [17.03.2023]";
         public const string WeshNull = "__WESH_NULL";
@@ -162,7 +174,7 @@ namespace wesh
                 string r = "";
                 for(int i = ToInt(args[1]); i < ToInt(args[2]); i++)
                 {
-                    r += ExecSub(args[3].Replace($"@{args[0]}", i.ToString()))+"\n";
+                    r += ExecSub(args[3].Replace(Lang["varOperator"]+args[0], i.ToString()))+"\n";
                 }
                 return r;
             } },
@@ -172,7 +184,7 @@ namespace wesh
                 string ret = "";
                 for(int i = 0; i < s.Length; i++)
                 {
-                    string o = ExecSub(args[1].Replace("@s", s[i]).Replace("@i", i.ToString()));
+                    string o = ExecSub(args[1].Replace(Lang["varOperator"]+"s", s[i]).Replace(Lang["varOperator"]+"i", i.ToString()));
                     if(o.Length > 0) ret += o + Environment.NewLine;
                 }
                 return ret;
@@ -183,9 +195,9 @@ namespace wesh
                 string ret = "";
                 for(int i = 0; i < s.Length; i++)
                 {
-                    if(Cond(ExecSub(args[1].Replace("@s", s[i]))))
+                    if(Cond(ExecSub(args[1].Replace(Lang["varOperator"]+"s", s[i]))))
                     {
-                        string o = ExecSub(args[2].Replace("@s", s[i]).Replace("@i", i.ToString()));
+                        string o = ExecSub(args[2].Replace(Lang["varOperator"]+"s", s[i]).Replace(Lang["varOperator"]+"i", i.ToString()));
                         if(o.Length > 0) ret += o + Environment.NewLine;
                     }
                 }
@@ -203,7 +215,7 @@ namespace wesh
 
                 for(int i = 1; i < args.Length; i++)
                 {
-                    code = code.Replace("@#"+i, args[i]);
+                    code = code.Replace(Lang["varOperator"]+"#"+i, args[i]);
                 }
 
                 return ExecSub(code);
@@ -363,6 +375,16 @@ namespace wesh
                 return args[0].Replace(args[1], args[2]);
             } },
 
+            {"str.getSpecChar", (args)=>{
+                if(args[0] == "a") return "\a";
+                if(args[0] == "b") return "\b";
+                if(args[0] == "n") return "\n";
+                if(args[0] == "r") return "\r";
+                if(args[0] == "t") return "\t";
+                if(args[0].StartsWith("x") || args[0].StartsWith("u")) return System.Convert.ToChar(ToInt(args[0].Replace("x", "").Replace("u", ""))).ToString();
+                return args[0];
+            } },
+
             {"fs.readFile", (args)=>{
                 string p = GetPath(args[0]);
                 if(!File.Exists(p)) return $"Файл \"{p}\" не найден.";
@@ -420,7 +442,7 @@ namespace wesh
             } },
 
             {"fs.deleteDir", (args)=>{
-                Directory.Delete(GetPath(args[0]));
+                Directory.Delete(GetPath(args[0]), true);
                 return "";
             } },
 
@@ -514,7 +536,7 @@ namespace wesh
                 {
                     text += kvp.Key + "=" + kvp.Value + Environment.NewLine;
                 }
-                File.WriteAllText(GetPath(args[1]), text);
+                File.WriteAllText(GetPath(args[1], true), text);
                 return "";
             } },
 
@@ -566,7 +588,7 @@ namespace wesh
                 string ret = "";
                 foreach(KeyValuePair<string, string> kvp in UserObjects[args[0]])
                 {
-                    string o = ExecSub(args[1].Replace("@k", kvp.Key).Replace("@v", kvp.Value));
+                    string o = ExecSub(args[1].Replace(Lang["varOperator"]+"k", kvp.Key).Replace(Lang["varOperator"]+"v", kvp.Value));
                     if(o.Length > 0) ret += o + Environment.NewLine;
                 }
                 return ret;
@@ -659,9 +681,16 @@ namespace wesh
             } },
 
             {"hotkey.set", (args)=>{
-                HotKey.SetHotKey(args[0], false, () =>
+                HotKey.SetHotKey(args[0], StringToBool(args[1]), StringToBool(args[2]), false, () =>
                 {
-                    ExecSub(args[1]);
+                    ExecSub(args[3]);
+                });
+                return "";
+            } },
+
+            {"hotkey.setKeyHandler", (args)=>{
+                HotKey.SetKeyHandler(false, (k)=>{
+                    ExecSub(args[0].Replace(Lang["varOperator"]+"key", k));
                 });
                 return "";
             } },
@@ -930,7 +959,7 @@ namespace wesh
                 Control el = Controls[args[0]];
 
                 if(args[1] == "click") el.Click += (o,e)=>ExecSub(args[2]);
-                if(args[1] == "keydown") el.KeyDown += (o,e)=>ExecSub(args[2].Replace("@alt", BoolToString(e.Alt)).Replace("@ctrl", BoolToString(e.Control)).Replace("@shift", BoolToString(e.Shift)).Replace("@key", e.KeyCode.ToString()));
+                if(args[1] == "keydown") el.KeyDown += (o,e)=>ExecSub(args[2].Replace(Lang["varOperator"]+"alt", BoolToString(e.Alt)).Replace(Lang["varOperator"]+"ctrl", BoolToString(e.Control)).Replace(Lang["varOperator"]+"shift", BoolToString(e.Shift)).Replace(Lang["varOperator"]+"key", e.KeyCode.ToString()));
 
                 return "";
             } },
@@ -960,7 +989,33 @@ namespace wesh
             {"env.set", (args)=>{
                 Environment.SetEnvironmentVariable(args[0], args[1], (args.Length>2&&args[2]=="true")?EnvironmentVariableTarget.Machine:EnvironmentVariableTarget.User);
                 return "";
-            } }
+            } },
+
+            {"win32.findWindow", (args)=>{
+                string name = "__WESH_WIN32_HANDLE_"+GetRandomName();
+                Win32Handles.Add(name, FindWindow(WeshNullToNull(args[0]), WeshNullToNull(args[1])));
+                return name;
+            } },
+
+            {"win32.findChildWindow", (args)=>{
+                string name = "__WESH_WIN32_HANDLE_"+GetRandomName();
+                Win32Handles.Add(name, FindWindowEx(Win32Handles[args[0]], (IntPtr)0, WeshNullToNull(args[1]), WeshNullToNull(args[2])));
+                return name;
+            } },
+
+            {"win32.getWindowText", (args)=>{
+                IntPtr h = Win32Handles[args[0]];
+                int len = SendMessage(h, 0xE, 0, 0)+1;
+                StringBuilder buff = new StringBuilder(len);
+                SendMessage(h, 0xD, len, buff);
+                return buff.ToString();
+            } },
+
+            {"win32.setWindowText", (args)=>{
+                StringBuilder buff = new StringBuilder(args[1]);
+                SendMessage(Win32Handles[args[0]], 0xC, 0, buff);
+                return "";
+            } },
         };
 
         public static Dictionary<string, string> Lang = new Dictionary<string, string>()
@@ -983,23 +1038,37 @@ namespace wesh
 
         public static Dictionary<string, string> Variables = new Dictionary<string, string>()
         {
+            { "null", WeshNull },
+            { "error", "" },
+            { "newLine", Environment.NewLine },
             { "weshDir", WeshDir },
             { "weshPath", WeshPath },
             { "currDir", Environment.CurrentDirectory },
-            { "null", WeshNull },
-            { "error", "" },
             { "modulesDir", WeshDir + "\\wesh-modules" },
             { "modulesUrl", "https://nekit270.ch/wesh-modules/MODULE_NAME.weshm" },
         };
 
         public static List<string> Constants = new List<string>()
         {
-            "weshPath", "weshDir", "null"
+            "weshPath", "weshDir", "newLine", "null"
         };
 
         public static Dictionary<string, Dictionary<string, string>> UserObjects = new Dictionary<string, Dictionary<string, string>>();
         public static Dictionary<string, Control> Controls = new Dictionary<string, Control>();
         public static Dictionary<string, string> Functions = new Dictionary<string, string>();
+        public static Dictionary<string, IntPtr> Win32Handles = new Dictionary<string, IntPtr>();
+
+        private static string WeshNullToNull(string s)
+        {
+            if (s == WeshNull) return null;
+            return s;
+        }
+
+        private static string NullToWeshNull(string s)
+        {
+            if (s == null) return WeshNull;
+            return s;
+        }
 
         private static string GetLangEl(string la)
         {
@@ -1319,143 +1388,156 @@ wesh [-v] [-h] [-c <команда>] [-f <файл>]
 
         public static string Exec(string cmd)
         {
-            List<string> args = new List<string>();
-
-            if (cmd == null || cmd.Trim().Length == 0) return "";
-
-            cmd = cmd.Replace("$SM", GetLangEl("cmdDelim"));
-
-            Regex rgx = new Regex(@"[^\\]{1}" + GetLangEl("cmdDelim"));
-            MatchCollection mc = rgx.Matches(cmd);
-            if (mc.Count > 0)
-            {
-                foreach (Match m in mc)
-                {
-                    cmd = cmd.Replace(m.Value, "\x01");
-                }
-
-                string r = "";
-                foreach (string c in cmd.Split('\x01'))
-                {
-                    if (c.Trim().Length > 0 && c.Trim() != "\x01") r += Exec(c) + Environment.NewLine;
-                }
-                return r;
-            }
-
-            cmd = cmd.Trim().Replace(GetLangEl("codeBlockEnd"), GetLangEl("codeBlockStart")).Replace("\\"+ GetLangEl("codeBlockStart"), "$Q3");
-
-            cmd = Regex.Replace(cmd, GetLangEl("codeBlockStart")+@"([^"+ GetLangEl("codeBlockStart") + @"]*)"+ GetLangEl("codeBlockStart"), new MatchEvaluator((m) =>
-            {
-                return m.Groups[1].Value.Replace("\\"+ GetLangEl("cmdDelim"), GetLangEl("cmdDelim")).Replace(GetLangEl("q1"), "$Q1").Replace(GetLangEl("q2"), "$Q2").Replace(" ", "$SP").Replace(GetLangEl("argsDelim"), "$CM").Replace(GetLangEl("varOperator"), "$AT").Replace(GetLangEl("execOperator"), "$AM").Replace(GetLangEl("mathOperator"), "$PR");
-            }));
-            cmd = Regex.Replace(cmd, GetLangEl("q1")+@"([^" + GetLangEl("q1") + @"]*)" + GetLangEl("q1"), new MatchEvaluator((m) => {
-                return m.Groups[1].Value.Replace(GetLangEl("q2"), "$Q2").Replace(" ", "$SP").Replace(GetLangEl("argsDelim"), "$CM");
-            }));
-            cmd = Regex.Replace(cmd, GetLangEl("q2") + @"([^"+ GetLangEl("q2") +"]*)" + GetLangEl("q2"), new MatchEvaluator((m) =>
-            {
-                return m.Groups[1].Value.Replace(GetLangEl("q1"), "$Q1").Replace(" ", "$SP").Replace(GetLangEl("argsDelim"), "$CM");
-            }));
-
-            cmd = cmd.Replace(GetLangEl("argsDelim"), "");
-            args = cmd.Split(' ').ToList();
-
-            cmd = args[0];
-            if (args.Count == 1)
-            {
-                args.Clear();
-            }
-            else
-            {
-                args.RemoveAt(0);
-            }
-
-            for (int j = 0; j < args.Count; j++)
-            {
-                string arg = args[j];
-
-                if (arg.Trim().Length < 2) continue;
-
-                arg = arg.Replace("$SP", " ");
-                arg = arg.Replace("$CM", GetLangEl("argsDelim"));
-                arg = arg.Replace("$Q1", GetLangEl("q1"));
-                arg = arg.Replace("$Q2", GetLangEl("q2"));
-                arg = arg.Replace("$Q3", GetLangEl("codeBlockStart"));
-                arg = arg.Replace("$PR", GetLangEl("mathOperator"));
-
-                if (arg.StartsWith(GetLangEl("doNotParseOperator")))
-                {
-                    arg = arg.Substring(1);
-                    args[j] = arg;
-                    continue;
-                }
-
-                MatchCollection vMatches = new Regex(GetLangEl("varOperator") + @"[a-zA-Z0-9_"+ GetLangEl("objectDelim") + "]+").Matches(arg);
-                if (vMatches.Count > 0)
-                {
-                    foreach (Match m in vMatches)
-                    {
-                        string val = m.Value;
-                        val = val.Replace(Lang["varOperator"], "");
-                        arg = arg.Replace(m.Value, GetVariable(val));
-                    }
-                }
-
-                MatchCollection eMatches = new Regex(GetLangEl("execOperator") + GetLangEl("operatorBlockStart") + "[^" + GetLangEl("operatorBlockEnd") + "]+" + GetLangEl("operatorBlockEnd")).Matches(arg);
-                if (eMatches.Count > 0)
-                {
-                    foreach (Match em in eMatches)
-                    {
-                        string val = em.Value;
-                        val = val.Replace(Lang["execOperator"] + Lang["operatorBlockStart"], "").Replace(Lang["operatorBlockEnd"], "");
-                        arg = arg.Replace(em.Value, Exec(val));
-                    }
-                }
-
-                if (arg[0] == Lang["execOperator"][0] && arg[1] != Lang["operatorBlockStart"][0])
-                {
-                    arg = Exec(arg.Substring(1));
-                }
-
-                MatchCollection mMatches = new Regex(GetLangEl("mathOperator") + GetLangEl("operatorBlockStart") + "[^" + GetLangEl("operatorBlockEnd") + "]+" + GetLangEl("operatorBlockEnd")).Matches(arg);
-                if (mMatches.Count > 0)
-                {
-                    foreach (Match mm in mMatches)
-                    {
-                        string val = mm.Value;
-                        val = val.Replace(Lang["mathOperator"] + Lang["operatorBlockStart"], "").Replace(Lang["operatorBlockEnd"], "");
-                        arg = arg.Replace(mm.Value, EvalJS(val));
-                    }
-                }
-
-                if (arg[0] == Lang["mathOperator"][0] && arg[1] != Lang["operatorBlockStart"][0])
-                {
-                    arg = EvalJS(arg.Substring(1));
-                }
-
-                arg = arg.Replace("$AM", Lang["execOperator"]).Replace("$AT", Lang["varOperator"]);
-
-                args[j] = arg;
-            }
-
-            if (!Commands.ContainsKey(cmd))
-            {
-                if(args.Count > 0 && args[0] == "=")
-                {
-                    SetVariable(cmd, args[1]);
-                    return "";
-                }
-                string msg = $"ОШИБКА: Команда {cmd} не найдена.";
-                Variables["error"] = msg;
-                return msg;
-            }
-
             string ret = "";
             try
             {
+                if (cmd == null || cmd.Trim().Length == 0) return "";
+
+                List<string> args = new List<string>();
+
+                cmd = cmd.Replace("$SM", GetLangEl("cmdDelim"));
+
+                Regex rgx = new Regex(@"[^\\]{1}" + GetLangEl("cmdDelim"));
+                MatchCollection mc = rgx.Matches(cmd);
+                if (mc.Count > 0)
+                {
+                    foreach (Match m in mc)
+                    {
+                        cmd = cmd.Replace(m.Value, "\x01");
+                    }
+
+                    string r = "";
+                    foreach (string c in cmd.Split('\x01'))
+                    {
+                        if (c.Trim().Length > 0 && c.Trim() != "\x01") r += Exec(c) + Environment.NewLine;
+                    }
+                    return r;
+                }
+
+                cmd = cmd.Trim().Replace(GetLangEl("codeBlockEnd"), GetLangEl("codeBlockStart")).Replace("\\" + GetLangEl("codeBlockStart"), "$Q3");
+
+                cmd = Regex.Replace(cmd, GetLangEl("codeBlockStart") + @"([^" + GetLangEl("codeBlockStart") + @"]*)" + GetLangEl("codeBlockStart"), new MatchEvaluator((m) =>
+                    {
+                        return m.Groups[1].Value.Replace("\\" + GetLangEl("cmdDelim"), GetLangEl("cmdDelim")).Replace(GetLangEl("q1"), "$Q1").Replace(GetLangEl("q2"), "$Q2").Replace(" ", "$SP").Replace(GetLangEl("argsDelim"), "$CM").Replace(GetLangEl("varOperator"), "$AT").Replace(GetLangEl("execOperator"), "$AM").Replace(GetLangEl("mathOperator"), "$PR");
+                    }));
+                cmd = Regex.Replace(cmd, GetLangEl("q1") + @"([^" + GetLangEl("q1") + @"]*)" + GetLangEl("q1"), new MatchEvaluator((m) =>
+                {
+                    return m.Groups[1].Value.Replace(GetLangEl("q2"), "$Q2").Replace(" ", "$SP").Replace(GetLangEl("argsDelim"), "$CM");
+                }));
+                cmd = Regex.Replace(cmd, GetLangEl("q2") + @"([^" + GetLangEl("q2") + "]*)" + GetLangEl("q2"), new MatchEvaluator((m) =>
+                  {
+                      return m.Groups[1].Value.Replace(GetLangEl("q1"), "$Q1").Replace(" ", "$SP").Replace(GetLangEl("argsDelim"), "$CM");
+                  }));
+
+                cmd = cmd.Replace(GetLangEl("argsDelim"), "");
+                args = cmd.Split(' ').ToList();
+
+                cmd = args[0];
+                if (args.Count == 1)
+                {
+                    args.Clear();
+                }
+                else
+                {
+                    args.RemoveAt(0);
+                }
+
+                for (int j = 0; j < args.Count; j++)
+                {
+                    string arg = args[j];
+
+                    if (arg.Trim().Length < 2) continue;
+
+                    arg = arg.Replace("$SP", " ");
+                    arg = arg.Replace("$CM", GetLangEl("argsDelim"));
+                    arg = arg.Replace("$Q1", GetLangEl("q1"));
+                    arg = arg.Replace("$Q2", GetLangEl("q2"));
+                    arg = arg.Replace("$Q3", GetLangEl("codeBlockStart"));
+                    arg = arg.Replace("$PR", GetLangEl("mathOperator"));
+
+                    if (arg.StartsWith(GetLangEl("doNotParseOperator")))
+                    {
+                        arg = arg.Substring(1);
+                        args[j] = arg;
+                        continue;
+                    }
+
+                    MatchCollection vbMatches = new Regex(GetLangEl("varOperator") + GetLangEl("operatorBlockStart") + "[^" + GetLangEl("operatorBlockEnd") + "]+" + GetLangEl("operatorBlockEnd")).Matches(arg);
+                    if (vbMatches.Count > 0)
+                    {
+                        foreach (Match vbm in vbMatches)
+                        {
+                            string val = vbm.Value;
+                            val = val.Replace(Lang["varOperator"] + Lang["operatorBlockStart"], "").Replace(Lang["operatorBlockEnd"], "");
+                            arg = arg.Replace(vbm.Value, GetVariable(val));
+                        }
+                    }
+
+                    MatchCollection vMatches = new Regex(GetLangEl("varOperator") + @"[a-zA-Z0-9_" + GetLangEl("objectDelim") + "]+").Matches(arg);
+                    if (vMatches.Count > 0)
+                    {
+                        foreach (Match m in vMatches)
+                        {
+                            string val = m.Value;
+                            val = val.Replace(Lang["varOperator"], "");
+                            arg = arg.Replace(m.Value, GetVariable(val));
+                        }
+                    }
+
+                    MatchCollection eMatches = new Regex(GetLangEl("execOperator") + GetLangEl("operatorBlockStart") + "[^" + GetLangEl("operatorBlockEnd") + "]+" + GetLangEl("operatorBlockEnd")).Matches(arg);
+                    if (eMatches.Count > 0)
+                    {
+                        foreach (Match em in eMatches)
+                        {
+                            string val = em.Value;
+                            val = val.Replace(Lang["execOperator"] + Lang["operatorBlockStart"], "").Replace(Lang["operatorBlockEnd"], "");
+                            arg = arg.Replace(em.Value, Exec(val));
+                        }
+                    }
+
+                    if (arg[0] == Lang["execOperator"][0] && arg[1] != Lang["operatorBlockStart"][0])
+                    {
+                        arg = Exec(arg.Substring(1));
+                    }
+
+                    MatchCollection mMatches = new Regex(GetLangEl("mathOperator") + GetLangEl("operatorBlockStart") + "[^" + GetLangEl("operatorBlockEnd") + "]+" + GetLangEl("operatorBlockEnd")).Matches(arg);
+                    if (mMatches.Count > 0)
+                    {
+                        foreach (Match mm in mMatches)
+                        {
+                            string val = mm.Value;
+                            val = val.Replace(Lang["mathOperator"] + Lang["operatorBlockStart"], "").Replace(Lang["operatorBlockEnd"], "");
+                            arg = arg.Replace(mm.Value, EvalJS(val));
+                        }
+                    }
+
+                    if (arg[0] == Lang["mathOperator"][0] && arg[1] != Lang["operatorBlockStart"][0])
+                    {
+                        arg = EvalJS(arg.Substring(1));
+                    }
+
+                    arg = arg.Replace("$AM", Lang["execOperator"]).Replace("$AT", Lang["varOperator"]);
+
+                    args[j] = arg;
+                }
+
+                if (!Commands.ContainsKey(cmd))
+                {
+                    if (args.Count > 0 && args[0] == "=")
+                    {
+                        SetVariable(cmd, args[1]);
+                        return "";
+                    }
+                    string msg = $"ERROR: Команда {cmd} не найдена.";
+                    Variables["error"] = msg;
+                    return msg;
+                }
+
                 ret = Commands[cmd](args.ToArray());
-            }catch (Exception ex)
+            }
+            catch(Exception ex)
             {
-                ret = "ОШИБКА: "+ex.Message;
+                ret = "ERROR: " + ex.Message;
             }
             return ret;
         }
