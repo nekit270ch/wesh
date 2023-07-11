@@ -1,5 +1,6 @@
 ﻿using System;
 using System.IO;
+using System.Linq;
 
 namespace wesh
 {
@@ -26,16 +27,23 @@ namespace wesh
             {
                 case "-c":
                     {
-                        Console.WriteLine(WESH.Exec(args[1]));
+                        Console.WriteLine(WESH.Exec(String.Join(" ", args.Skip(1))));
                         break;
                     }
                 case "-f":
                     {
-                        if (!File.Exists(args[1]))
+                        string fileName = WESH.GetPath(args[1]);
+
+                        if (fileName == null)
                         {
                             Console.WriteLine($"Файл \"{args[1]}\" не найден.");
                             Environment.Exit(1);
                         }
+
+                        WESH.SetVariable("scriptArgs", WESH.CreateArray(args.Skip(2).ToArray()));
+                        WESH.SetVariable("scriptPath", fileName);
+                        WESH.SetVariable("scriptDir", Path.GetDirectoryName(fileName));
+
                         WESH.ExecScript(File.ReadAllText(args[1]));
                         break;
                     }
