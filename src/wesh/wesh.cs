@@ -1094,6 +1094,11 @@ namespace wesh
                 }
 
                 return InvokeMethod(ComObjects[args[0]], args[1], ar.ToArray()).ToString();
+            } },
+
+            {"getargs", (args)=>{
+                Console.WriteLine(String.Join(", ", args));
+                return "";
             } }
         };
 
@@ -1640,16 +1645,26 @@ wesh [-v] [-h] [-c <команда>] [-f <файл>]
             rawCode = rawCode.Replace("\r\n", "\n");
             rawCode = rawCode.Replace("\r", "\n");
             rawCode = Regex.Replace(rawCode, $@"\n[\s]*{GetLangEl("comment")}.*\n", "\n");
-            rawCode = Regex.Replace(rawCode, $@"(\n(?=[^{GetLangEl("codeBlockStart")}]*{GetLangEl("codeBlockEnd")}))", " ; ");
+            //rawCode = Regex.Replace(rawCode, $@"(\n(?=[^{GetLangEl("codeBlockStart")}]*{GetLangEl("codeBlockEnd")}))", " ; ");
+            //rawCode = Regex.Replace(rawCode, $@"((?=[^{GetLangEl("codeBlockStart")}]*{GetLangEl("codeBlockEnd")})\n)", " ; ");
 
-            rawCode = rawCode.Replace(Lang["codeBlockStart"] + " " + Lang["cmdDelim"], Lang["codeBlockStart"]);
-            rawCode = rawCode.Replace(Lang["codeBlockStart"] + "\n", Lang["codeBlockStart"]);
-            rawCode = Regex.Replace(rawCode, GetLangEl("cmdDelim") + "[\\s]*\\n", GetLangEl("cmdDelim"));
-            rawCode = Regex.Replace(rawCode, GetLangEl("cmdDelim")+"[\\s]*"+GetLangEl("codeBlockEnd"), Lang["codeBlockEnd"]);
             int bCount = 0;
             for(int i = 0; i < rawCode.Length; i++)
             {
                 char ch = rawCode[i];
+
+                if (bCount != 0)
+                {
+                    if (ch == '\n')
+                    {
+                        StringBuilder sb = new StringBuilder(rawCode);
+                        sb[i] = ' ';
+                        rawCode = sb.ToString();
+                        rawCode = rawCode.Insert(i, $" {new string('\\', bCount)}{Lang["cmdDelim"]} ");
+                        i += 3+bCount;
+                    }
+                }
+
                 if (ch == Lang["codeBlockStart"][0])
                 {
                     if (bCount != 0)
@@ -1667,15 +1682,26 @@ wesh [-v] [-h] [-c <команда>] [-f <файл>]
                         i += bCount-1;
                     }
                     bCount--;
-                }else if(ch == Lang["cmdDelim"][0])
+                }
+                if(ch == Lang["cmdDelim"][0])
                 {
                     if (bCount != 0)
                     {
+                        Console.WriteLine(bCount);
                         rawCode = rawCode.Insert(i, new string('\\', bCount));
                         i += bCount;
                     }
                 }
             }
+
+            //Console.WriteLine(rawCode + "\n");
+
+            rawCode = Regex.Replace(rawCode, $@"([\\]*){GetLangEl("codeBlockStart")}[\s]*([\\]*){GetLangEl("cmdDelim")}", "$1"+Lang["codeBlockStart"]);
+            rawCode = Regex.Replace(rawCode, $@"{GetLangEl("codeBlockStart")}[\s]*\n", Lang["codeBlockStart"]);
+            rawCode = Regex.Replace(rawCode, GetLangEl("cmdDelim") + "[\\s]*\\n", GetLangEl("cmdDelim"));
+            rawCode = Regex.Replace(rawCode, $@"([\\]*){GetLangEl("cmdDelim")}[\s]*([\\]*){GetLangEl("codeBlockEnd")}", " $2"+Lang["codeBlockEnd"]);
+            //Console.WriteLine(rawCode);
+            //return "";
 
             string[] code = rawCode.Split('\n');
             foreach (string line in code)
