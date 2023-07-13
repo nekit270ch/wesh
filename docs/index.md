@@ -336,7 +336,7 @@ for i, 0, 10, {
 
 `win32.findChildWindow <дескриптор родительского окна>, <класс>, <текст>` - ищет дочернее окно. Возвращает ID дескриптора окна. Класс или текст могут быть равны `@null`. Подробнее: [FindWindowEx](https://learn.microsoft.com/ru-ru/windows/win32/api/winuser/nf-winuser-findwindowexa)
 
-`win32.sendMessage <дескриптор>, <сообщение>, <wParam>, <lParam>` - отправить сообщение окну. Подробнее: [https://learn.microsoft.com/ru-ru/windows/win32/api/winuser/nf-winuser-sendmessage](SendMessage)
+`win32.sendMessage <дескриптор>, <сообщение>, <wParam>, <lParam>` - отправить сообщение окну. Подробнее: [SendMessage](https://learn.microsoft.com/ru-ru/windows/win32/api/winuser/nf-winuser-sendmessage)
 
 `win32.getWindowText <дескриптор окна>` - получить текст из указанного окна.
 
