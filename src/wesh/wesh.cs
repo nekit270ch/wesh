@@ -15,6 +15,7 @@ using Microsoft.JScript;
 using System.Security.Principal;
 using Microsoft.Win32;
 using Microsoft.VisualBasic;
+using System.IO.Compression;
 
 namespace wesh
 {
@@ -43,8 +44,8 @@ namespace wesh
         [DllImport("user32.dll", CharSet = CharSet.Auto, CallingConvention = CallingConvention.StdCall)]
         private static extern IntPtr GetForegroundWindow();
 
-        public const double Version = 1.1;
-        public const string VersionStr = "WESH v1.1";
+        public const double Version = 1.2;
+        public const string VersionStr = "WESH v1.2";
         public const string WeshNull = "__WESH_NULL";
         public static readonly string WeshPath = Process.GetCurrentProcess().MainModule.FileName;
         public static readonly string WeshDir = new FileInfo(Process.GetCurrentProcess().MainModule.FileName).Directory.FullName;
@@ -179,7 +180,7 @@ namespace wesh
                 for(int i = ToInt(args[1]); i < ToInt(args[3]); i+=ToInt(args[2]))
                 {
                     SetVariable(args[0], i.ToString());
-                    r += Exec(args[3])+Environment.NewLine;
+                    r += Exec(args[4])+Environment.NewLine;
                 }
                 return r;
             } },
@@ -1137,6 +1138,39 @@ namespace wesh
             {"getargs", (args)=>{
                 Console.WriteLine(String.Join(", ", args));
                 return "";
+            } },
+
+            {"zip.create", (args)=>{
+                ZipFile.CreateFromDirectory(GetPath(args[0]), GetPath(args[1]));
+                return "";
+            } },
+
+            {"zip.extract", (args)=>{
+                ZipFile.ExtractToDirectory(GetPath(args[0]), GetPath(args[1]));
+                return "";
+            } },
+
+            {"barr.readFromFile", (args)=>{
+                byte[] fd = File.ReadAllBytes(GetPath(args[0]));
+                List<string> wa = new List<string>();
+
+                foreach(byte b in fd)
+                {
+                    wa.Add(b.ToString());
+                }
+
+                return CreateArray(wa.ToArray());
+            } },
+
+            {"barr.writeToFile", (args)=>{
+                List<byte> bs = new List<byte>();
+                string[] ss = WeshArrayToArray(args[0]);
+                foreach(string s in ss)
+                {
+                    bs.Add(byte.Parse(s));
+                }
+                File.WriteAllBytes(GetPath(args[1], true), bs.ToArray());
+                return "";
             } }
         };
 
@@ -1363,6 +1397,19 @@ namespace wesh
             dict.Add("length", i.ToString());
 
             return CreateObject(dict);
+        }
+
+        public static string[] WeshArrayToArray(string arr)
+        {
+            List<string> a = new List<string>();
+            var obj = UserObjects[arr];
+
+            for(int i = 0; i < ToInt(obj["length"]); i++)
+            {
+                a.Add(obj[i.ToString()]);
+            }
+
+            return a.ToArray();
         }
 
         private static string GetRequest(string url)
@@ -1667,11 +1714,27 @@ wesh [-v] [-h] [-c <команда>] [-f <файл>]
 
                 if (!Commands.ContainsKey(cmd))
                 {
-                    if (args.Count > 0 && args[0] == "=")
+                    if (args.Count > 0)
                     {
-                        SetVariable(cmd, args[1]);
+                        if(args[0] == "=")
+                        {
+                            SetVariable(cmd, args[1]);
+                        }
+                        else if(args[0] == "=&")
+                        {
+                            SetVariable(cmd, Exec(args[1]));
+                        }
+                        else if(args[0] == "=@")
+                        {
+                            SetVariable(cmd, GetVariable(args[1]));
+                        }
+                        else if(args[0] == "=%")
+                        {
+                            SetVariable(cmd, EvalJS(args[1]));
+                        }
                         return "";
                     }
+
                     string msg = $"ERROR: \"{cmd}\" command not found";
                     SetVariable("error", msg);
 
