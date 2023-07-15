@@ -325,7 +325,7 @@ for i, 0, 10, {
 
 `gui.showForm <id формы>` - отобразить форму.
 
-`gui.createElem <тип>` - создать элемент GUI и вернуть его ID. Допустимые типы: `panel`, `label`, `button`, `textbox`, `checkbox`, `combobox`.
+`gui.createElem <тип>, <x>, <y>, <длина>, <ширина>` - создать элемент GUI и вернуть его ID. Допустимые типы: `panel`, `label`, `button`, `textbox`, `checkbox`, `combobox`.
 
 `gui.getElemProp <id формы/элемента>, <имя свойства>` - получить значение свойства элемента или формы. Допустимые свойства: `text`, `x`, `y`, `width`, `height`, `color` (в формате `R,G,B`), bgcolor (в формате `R,G,B`), `checked` (только для `checkbox`), `multiline` (только для `textbox`).
 
