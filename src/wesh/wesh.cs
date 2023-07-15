@@ -1657,11 +1657,11 @@ wesh [-v] [-h] [-c <команда>] [-f <файл>]
                         continue;
                     }
 
-                    if(arg[0] == Lang["varOperator"][0] && arg[1] != Lang["operatorBlockStart"][0])
+                    /*if(arg[0] == Lang["varOperator"][0] && arg[1] != Lang["operatorBlockStart"][0])
                     {
                         args[j] = GetVariable(arg.Substring(1));
                         continue;
-                    }
+                    }*/
 
                     MatchCollection eMatches = new Regex(GetLangEl("execOperator") + GetLangEl("operatorBlockStart") + "[^" + GetLangEl("operatorBlockEnd") + "]+" + GetLangEl("operatorBlockEnd")).Matches(arg);
                     if (eMatches.Count > 0)
