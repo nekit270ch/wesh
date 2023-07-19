@@ -19,8 +19,6 @@ using System.IO.Compression;
 
 namespace wesh
 {
-    delegate string Command(string[] args);
-
     class WESH
     {
         [DllImport("user32.dll", CharSet = CharSet.Auto, CallingConvention = CallingConvention.StdCall)]
@@ -44,8 +42,29 @@ namespace wesh
         [DllImport("user32.dll", CharSet = CharSet.Auto, CallingConvention = CallingConvention.StdCall)]
         private static extern IntPtr GetForegroundWindow();
 
-        public const double Version = 1.2;
-        public const string VersionStr = "WESH v1.2";
+        [DllImport("user32.dll", CharSet = CharSet.Auto, CallingConvention = CallingConvention.StdCall)]
+        private static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndA, int X, int Y, int W, int H, int flags);
+
+        [DllImport("user32.dll", CharSet = CharSet.Auto, CallingConvention = CallingConvention.StdCall)]
+        private static extern bool GetWindowRect(IntPtr hWnd, ref W32Rect rect);
+
+        [DllImport("user32.dll", CharSet = CharSet.Auto, CallingConvention = CallingConvention.StdCall)]
+        private static extern bool EnumWindows(W32EnumWindowsProc proc, IntPtr lParam);
+
+        private struct W32Rect
+        {
+            public int Left { get; set; }
+            public int Top { get; set; }
+            public int Right { get; set; }
+            public int Bottom { get; set; }
+        }
+
+        delegate bool W32EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
+
+        public delegate string Command(string[] args);
+
+        public const double Version = 1.3;
+        public const string VersionStr = "WESH v1.3";
         public const string WeshNull = "__WESH_NULL";
         public static readonly string WeshPath = Process.GetCurrentProcess().MainModule.FileName;
         public static readonly string WeshDir = new FileInfo(Process.GetCurrentProcess().MainModule.FileName).Directory.FullName;
@@ -405,6 +424,10 @@ namespace wesh
                 return String.Concat(args);
             } },
 
+            {"str.split", (args)=>{
+                return CreateArray(args[0].Split(args[1][0]));
+            } },
+
             {"fs.readFile", (args)=>{
                 string p = GetPath(args[0]);
                 if(!File.Exists(p)) return $"Файл \"{p}\" не найден.";
@@ -413,6 +436,11 @@ namespace wesh
 
             {"fs.writeFile", (args)=>{
                 File.WriteAllText(GetPath(args[0], true), args[1]);
+                return "";
+            } },
+
+            {"fs.addToFile", (args)=>{
+                File.AppendAllText(GetPath(args[0], true), args[1]);
                 return "";
             } },
 
@@ -692,6 +720,19 @@ namespace wesh
                 return args[2];
             } },
 
+            {"arr.foreach", (args)=>{
+                string r = "";
+                int i = 0;
+                foreach(string s in WeshArrayToArray(args[0]))
+                {
+                    SetVariable("k", i.ToString());
+                    SetVariable("v", s);
+                    r += Exec(args[1]) + Environment.NewLine;
+                    i++;
+                }
+                return r;
+            } },
+
             {"module.install", (args)=>{
                 string addr = Variables["modulesUrl"].Replace("MODULE_NAME", args[0]);
                 new WebClient().DownloadFile(addr, Variables["modulesDir"] + "\\" + args[0] + ".weshm");
@@ -743,9 +784,70 @@ namespace wesh
                 return "";
             } },
 
-            {"http.server", (args)=>{
+            {"http.fileServer", (args)=>{
                 ServeFolder(GetPath(args[0]), ToInt(args[1]), false);
                 return "";
+            } },
+
+            {"http.server", (args)=>{
+                HttpListener server = new HttpListener();
+                server.Prefixes.Add($"http://127.0.0.1:{args[0]}/");
+                server.Start();
+
+                while (true)
+                {
+                    var ctx = server.GetContext();
+                    var req = ctx.Request;
+                    var res = ctx.Response;
+                    var output = res.OutputStream;
+
+                    SetVariable("url", req.RawUrl);
+                    SetVariable("ip", req.RemoteEndPoint.ToString());
+                    SetVariable("method", req.HttpMethod);
+
+                    Dictionary<string, string> headers = new Dictionary<string, string>();
+
+                    foreach(string key in req.Headers)
+                    {
+                        headers.Add(key, req.Headers[key]);
+                    }
+
+                    SetVariable("headers", CreateObject(headers));
+
+                    Exec(args[1]);
+
+                    res.StatusCode = ToInt(GetVariable("statusCode"));
+                    res.ContentType = GetVariable("contentType");
+
+                    byte[] buffer = Encoding.UTF8.GetBytes(GetVariable("content"));
+
+                    res.ContentLength64 = buffer.Length;
+                    output.Write(buffer, 0, buffer.Length);
+                    output.Flush();
+                    output.Close();
+                }
+            } },
+
+            {"http.parseUrl", (args)=>{
+                Dictionary<string, string> uo = new Dictionary<string, string>();
+
+                uo.Add("fullUrl", args[0]);
+                uo.Add("path", args[0].Split('?')[0]);
+
+                Dictionary<string, string> q = new Dictionary<string, string>();
+
+                if (args[0].Contains("?"))
+                {
+                    foreach(string qs in args[0].Split('?')[1].Split('&'))
+                    {
+                        string[] arr = qs.Split('=');
+                        if(arr.Length == 2) q.Add(arr[0], arr[1]);
+                    }
+
+                    uo.Add("query", CreateObject(q));
+                }
+
+                return CreateObject(uo);
             } },
 
             {"proc.list", (args)=>{
@@ -1050,6 +1152,18 @@ namespace wesh
                 return name;
             } },
 
+            {"win32.enumWindows", (args)=>{
+                string r = "";
+                EnumWindows((handle, lParam)=>{
+                    string name = "__WESH_WIN32_HANDLE_"+GetRandomName();
+                    Win32Handles.Add(name, handle);
+                    SetVariable("wnd", name);
+                    r += Exec(args[0])+Environment.NewLine;
+                    return true;
+                }, IntPtr.Zero);
+                return r;
+            } },
+
             {"win32.getWindowText", (args)=>{
                 IntPtr h = Win32Handles[args[0]];
                 int len = SendMessage(h, 0xE, 0, 0)+1;
@@ -1061,6 +1175,22 @@ namespace wesh
             {"win32.setWindowText", (args)=>{
                 StringBuilder buff = new StringBuilder(args[1]);
                 SendMessage(Win32Handles[args[0]], 0xC, 0, buff);
+                return "";
+            } },
+
+            {"win32.getWindowPos", (args)=>{
+                W32Rect r = new W32Rect();
+                GetWindowRect(Win32Handles[args[0]], ref r);
+                return CreateObject(new Dictionary<string, string>(){
+                    {"x", r.Left.ToString() },
+                    {"y", r.Top.ToString() },
+                    {"width", (r.Right-r.Left).ToString() },
+                    {"height", (r.Bottom-r.Top).ToString() }
+                });
+            } },
+
+            {"win32.setWindowPos", (args)=>{
+                SetWindowPos(Win32Handles[args[0]], IntPtr.Zero, ToInt(args[1]), ToInt(args[2]), args.Length>3?ToInt(args[3]):0, args.Length>4?ToInt(args[3]):0, args.Length>4?0:0x01);
                 return "";
             } },
 
@@ -1083,6 +1213,11 @@ namespace wesh
                 string name = "__WESH_WIN32_HANDLE_"+GetRandomName();
                 Win32Handles.Add(name, GetForegroundWindow());
                 return name;
+            } },
+
+            {"win32.clearHandles", (args)=>{
+                Win32Handles.Clear();
+                return "";
             } },
 
             {"clipboard.get", (args)=>{
@@ -1495,7 +1630,7 @@ wesh [-v] [-h] [-c <команда>] [-f <файл>]
                 {
                     res.StatusCode = 404;
                     res.ContentType = "text/html";
-                    buffer = Encoding.UTF8.GetBytes($"<!doctype html><center><h1>404 Not Found</h1><p>File {req.RawUrl} not found on this server.</p></center>");
+                    buffer = Encoding.UTF8.GetBytes($"<!doctype html><center><h1>404 Not Found</h1><p>File {req.RawUrl} was not found on this server.</p></center>");
                 }
                 res.ContentLength64 = buffer.Length;
                 output.Write(buffer, 0, buffer.Length);
@@ -1718,15 +1853,15 @@ wesh [-v] [-h] [-c <команда>] [-f <файл>]
                     {
                         if(args[0] == "=")
                         {
-                            SetVariable(cmd, args[1]);
+                            SetVariable(cmd, String.Join(" ", args.Skip(1)));
                         }
                         else if(args[0] == "=&")
                         {
-                            SetVariable(cmd, Exec(args[1]));
+                            SetVariable(cmd, Exec(String.Join(" ", args.Skip(1))));
                         }
                         else if(args[0] == "=@")
                         {
-                            SetVariable(cmd, GetVariable(args[1]));
+                            SetVariable(cmd, GetVariable(String.Join(" ", args.Skip(1))));
                         }
                         else if(args[0] == "=%")
                         {
