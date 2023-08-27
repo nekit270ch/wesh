@@ -94,7 +94,6 @@
   </PropertyGroup>
   <ItemGroup>
     <Reference Include="Microsoft.JScript" />
-    <Reference Include="Microsoft.VisualBasic" />
     <Reference Include="System" />
     <Reference Include="System.Core" />
     <Reference Include="System.Drawing" />
@@ -113,6 +112,7 @@
     <Reference Include="System.Xml" />
   </ItemGroup>
   <ItemGroup>
+    <Compile Include="dllcaller.cs" />
     <Compile Include="wesh.cs" />
     <Compile Include="hotkey.cs" />
     <Compile Include="Program.cs" />

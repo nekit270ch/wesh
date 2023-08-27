@@ -41,9 +41,9 @@ namespace wesh
             });
         }
 
-        public static IntPtr SetHotKey(string skey, bool ctrl, bool alt, bool stop, HotKeyCallback callback)
+        public static IntPtr SetHotKey(string skey, bool ctrl, bool alt, bool shift, bool stop, HotKeyCallback callback)
         {
-            bool ctrlPressed = false, altPressed = false;
+            bool ctrlPressed = false, altPressed = false, shiftPressed = false;
 
             return SetHook((nCode, wParam, lParam)=>{
                 int vkCode = Marshal.ReadInt32(lParam);
@@ -52,13 +52,15 @@ namespace wesh
                 if (nCode >= 0 && wParam == (IntPtr)WM_KEYDOWN)
                 {
                     if (key.Contains("ControlKey")) ctrlPressed = true;
-                    if(key.Contains("Menu")) altPressed = true;
-                    else if ((ctrl?ctrlPressed:true) && (alt?altPressed:true) && key == skey) callback();
+                    if (key.Contains("Menu")) altPressed = true;
+                    if (key.Contains("ShiftKey")) shiftPressed = true;
+                    else if ((ctrl?ctrlPressed:true) && (alt?altPressed:true) && (shift?shiftPressed:true) && key == skey) callback();
                 }
                 else if(nCode >= 0 && wParam == (IntPtr)WM_KEYUP)
                 {
                     if (key.Contains("ControlKey")) ctrlPressed = false;
                     if (key.Contains("Menu")) altPressed = false;
+                    if (key.Contains("ShiftKey")) shiftPressed = false;
                 }
 
                 return stop?_hookID:CallNextHookEx(_hookID, nCode, wParam, lParam);

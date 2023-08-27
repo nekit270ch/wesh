@@ -8,14 +8,13 @@ using System.Threading;
 using System.Drawing;
 using System.Windows.Forms;
 using System.Net;
-using System.Reflection;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using Microsoft.JScript;
 using System.Security.Principal;
 using Microsoft.Win32;
-using Microsoft.VisualBasic;
 using System.IO.Compression;
+using DllCallerLib;
 
 namespace wesh
 {
@@ -32,6 +31,12 @@ namespace wesh
 
         [DllImport("user32.dll", CharSet = CharSet.Auto, CallingConvention = CallingConvention.StdCall)]
         private static extern int SendMessage(IntPtr hWnd, int wMsg, long lParam, long wParam);
+
+        [DllImport("user32.dll", CharSet = CharSet.Auto, CallingConvention = CallingConvention.StdCall)]
+        private static extern int PostMessage(IntPtr hWnd, int wMsg, long lParam, StringBuilder wParam);
+
+        [DllImport("user32.dll", CharSet = CharSet.Auto, CallingConvention = CallingConvention.StdCall)]
+        private static extern int PostMessage(IntPtr hWnd, int wMsg, long lParam, long wParam);
 
         [DllImport("user32.dll", CharSet = CharSet.Auto, CallingConvention = CallingConvention.StdCall)]
         private static extern IntPtr FindWindow(string lpClassName, string lpWindow);
@@ -51,6 +56,9 @@ namespace wesh
         [DllImport("user32.dll", CharSet = CharSet.Auto, CallingConvention = CallingConvention.StdCall)]
         private static extern bool EnumWindows(W32EnumWindowsProc proc, IntPtr lParam);
 
+        [DllImport("user32.dll", CharSet = CharSet.Auto, CallingConvention = CallingConvention.StdCall)]
+        private static extern void keybd_event(byte bVk, byte bScan, ulong dwFlags, int extraInfo);
+
         private struct W32Rect
         {
             public int Left { get; set; }
@@ -63,8 +71,8 @@ namespace wesh
 
         public delegate string Command(string[] args);
 
-        public const double Version = 1.3;
-        public const string VersionStr = "WESH v1.3";
+        public const double Version = 1.5;
+        public const string VersionStr = "WESH v1.5";
         public const string WeshNull = "__WESH_NULL";
         public static readonly string WeshPath = Process.GetCurrentProcess().MainModule.FileName;
         public static readonly string WeshDir = new FileInfo(Process.GetCurrentProcess().MainModule.FileName).Directory.FullName;
@@ -74,6 +82,10 @@ namespace wesh
         {
             {".", (args)=>{
                 return EvalJS(String.Join(" ", args));
+            } },
+
+            {"cond", (args)=>{
+                return BoolToString(Cond(String.Join(" ", args)));
             } },
 
             {"echo", (args)=>{
@@ -239,6 +251,12 @@ namespace wesh
                 return "";
             } },
 
+            {"afunc", (args)=>{
+                string name = "__WESH_FUNCTION_"+GetRandomName();
+                Functions.Add(name, args[0]);
+                return name;
+            } },
+
             {"f", (args)=>{
                 if(!Functions.ContainsKey(args[0])) return "";
                 string code = Functions[args[0]];
@@ -329,7 +347,9 @@ namespace wesh
             } },
 
             {"inputbox", (args)=>{
-                return Interaction.InputBox(args[0], args[1], args[2]);
+                string val = args[2];
+                InputBox(args[0], args[1], ref val);
+                return val;
             } },
 
             {"requestAdminPriv", (args)=>{
@@ -645,6 +665,70 @@ namespace wesh
                 return ret;
             } },
 
+            {"class", (args)=>{
+                Dictionary<string, string> cls = new Dictionary<string, string>();
+
+                foreach(string ce in args[1].Replace("\\;", "$DTC").Split(';'))
+                {
+                    string ces = ce.Trim();
+
+                    if (ces.Contains("()"))
+                    {
+                        string[] cla = ces.Split(')');
+                        cla[0] = cla[0].Trim();
+                        string val = String.Join(")", cla.Skip(1)).Trim().Replace("$DTC", "\\;");
+                        val = "&afunc " + val;
+                        cla[0] = cla[0].Replace("(", "");
+                        cls.Add(cla[0].Trim(), ParseArg(val));
+                    }
+                    else
+                    {
+                        string[] cla = ce.Trim().Split('=');
+                        if(cla.Length < 2) continue;
+                        cla[0] = cla[0].Trim();
+                        string val = ParseQuotes(String.Join("=", cla.Skip(1)).Trim().Replace("$DTC", "\\;"));
+                        cls.Add(cla[0], ParseArg(val));
+                    }
+                }
+
+                Classes.Add(args[0], cls);
+
+                return "";
+            } },
+
+            {"new", (args)=>{
+                string name = "__WESH_OBJECT_"+GetRandomName();
+
+                Dictionary<string, string> obj = new Dictionary<string, string>();
+
+                UserObjects.Add(name, obj);
+
+                foreach(KeyValuePair<string, string> kvp in Classes[args[0]])
+                {
+                    string val = kvp.Value;
+                    if (Functions.ContainsKey(kvp.Value))
+                    {
+                        string funcCode = Functions[kvp.Value];
+                        string newName = "__WESH_FUNCTION_"+GetRandomName();
+                        funcCode = funcCode.Replace("this.", name + ".");
+                        Functions.Add(newName, funcCode);
+                        val = newName;
+                    }
+                    obj.Add(kvp.Key, val);
+                }
+
+                if (obj.ContainsKey("constructor"))
+                {
+                    string code = Functions[obj["constructor"]];
+                    SetVariable("funcArgs", CreateArray(args.Skip(1).ToArray()));
+                    Exec(code);
+                }
+
+                obj.Add("_class", args[0]);
+
+                return name;
+            } },
+
             {"arr.create", (args)=>{
                 return CreateArray(args);
             } },
@@ -745,9 +829,9 @@ namespace wesh
             } },
 
             {"hotkey.set", (args)=>{
-                HotKey.SetHotKey(args[0], StringToBool(args[1]), StringToBool(args[2]), false, () =>
+                HotKey.SetHotKey(args[0], StringToBool(args[1]), StringToBool(args[2]), StringToBool(args[3]), false, () =>
                 {
-                    Exec(args[3]);
+                    Exec(args[4]);
                 });
                 return "";
             } },
@@ -904,7 +988,7 @@ namespace wesh
                 var ps = Process.GetProcessesByName(args[0]);
                 var p = ps[0];
 
-                Win32Handles.Add(handleName, p.MainWindowHandle);
+                Pointers.Add(handleName, p.MainWindowHandle);
 
                 UserObjects.Add(name, new Dictionary<string, string>
                 {
@@ -928,7 +1012,14 @@ namespace wesh
                 return "";
             } },
 
-            {"proc.sendKeys", (args)=>{
+            {"kb.sendKey", (args)=>{
+                byte vk = System.Convert.ToByte(Enum.Parse(typeof(Keys), args[0]));
+                keybd_event(vk, 0, 0, 0);
+                //keybd_event(vk, 0x45, 0x1 | 0x2, 0);
+                return "";
+            } },
+
+            {"kb.sendKeys", (args)=>{
                 SendKeys.SendWait(args[0]);
                 return "";
             } },
@@ -1131,6 +1222,12 @@ namespace wesh
                 else return "";
             } },
 
+            {"gui.getElemHandle", (args)=>{
+                string name = "__WESH_WIN32_HANDLE_"+GetRandomName();
+                Pointers.Add(name, Controls[args[0]].Handle);
+                return name;
+            } },
+
             {"env.get", (args)=>{
                 return Environment.GetEnvironmentVariable(args[0], (args.Length>1&&args[1]=="true")?EnvironmentVariableTarget.Machine:EnvironmentVariableTarget.User);
             } },
@@ -1142,13 +1239,13 @@ namespace wesh
 
             {"win32.findWindow", (args)=>{
                 string name = "__WESH_WIN32_HANDLE_"+GetRandomName();
-                Win32Handles.Add(name, FindWindow(WeshNullToNull(args[0]), WeshNullToNull(args[1])));
+                Pointers.Add(name, FindWindow(WeshNullToNull(args[0]), WeshNullToNull(args[1])));
                 return name;
             } },
 
             {"win32.findChildWindow", (args)=>{
                 string name = "__WESH_WIN32_HANDLE_"+GetRandomName();
-                Win32Handles.Add(name, FindWindowEx(Win32Handles[args[0]], (IntPtr)0, WeshNullToNull(args[1]), WeshNullToNull(args[2])));
+                Pointers.Add(name, FindWindowEx(Pointers[args[0]], (IntPtr)0, WeshNullToNull(args[1]), WeshNullToNull(args[2])));
                 return name;
             } },
 
@@ -1156,7 +1253,7 @@ namespace wesh
                 string r = "";
                 EnumWindows((handle, lParam)=>{
                     string name = "__WESH_WIN32_HANDLE_"+GetRandomName();
-                    Win32Handles.Add(name, handle);
+                    Pointers.Add(name, handle);
                     SetVariable("wnd", name);
                     r += Exec(args[0])+Environment.NewLine;
                     return true;
@@ -1165,7 +1262,7 @@ namespace wesh
             } },
 
             {"win32.getWindowText", (args)=>{
-                IntPtr h = Win32Handles[args[0]];
+                IntPtr h = Pointers[args[0]];
                 int len = SendMessage(h, 0xE, 0, 0)+1;
                 StringBuilder buff = new StringBuilder(len);
                 SendMessage(h, 0xD, len, buff);
@@ -1174,13 +1271,13 @@ namespace wesh
 
             {"win32.setWindowText", (args)=>{
                 StringBuilder buff = new StringBuilder(args[1]);
-                SendMessage(Win32Handles[args[0]], 0xC, 0, buff);
+                SendMessage(Pointers[args[0]], 0xC, 0, buff);
                 return "";
             } },
 
             {"win32.getWindowPos", (args)=>{
                 W32Rect r = new W32Rect();
-                GetWindowRect(Win32Handles[args[0]], ref r);
+                GetWindowRect(Pointers[args[0]], ref r);
                 return CreateObject(new Dictionary<string, string>(){
                     {"x", r.Left.ToString() },
                     {"y", r.Top.ToString() },
@@ -1190,34 +1287,69 @@ namespace wesh
             } },
 
             {"win32.setWindowPos", (args)=>{
-                SetWindowPos(Win32Handles[args[0]], IntPtr.Zero, ToInt(args[1]), ToInt(args[2]), args.Length>3?ToInt(args[3]):0, args.Length>4?ToInt(args[3]):0, args.Length>4?0:0x01);
+                SetWindowPos(Pointers[args[0]], IntPtr.Zero, ToInt(args[1]), ToInt(args[2]), args.Length>3?ToInt(args[3]):0, args.Length>4?ToInt(args[3]):0, args.Length>4?0:0x01);
                 return "";
             } },
 
             {"win32.sendMessage", (args)=>{
-                if(int.TryParse(args[3], out int wpi)) return SendMessage(Win32Handles[args[0]], ToInt(args[1]), ToInt(args[2]), wpi).ToString();
-                return SendMessage(Win32Handles[args[0]], ToInt(args[1]), ToInt(args[2]), new StringBuilder(args[3])).ToString();
+                if(int.TryParse(args[3], out int wpi)) return SendMessage(Pointers[args[0]], ToInt(args[1]), ToInt(args[2]), wpi).ToString();
+                return SendMessage(Pointers[args[0]], ToInt(args[1]), ToInt(args[2]), new StringBuilder(args[3])).ToString();
+            } },
+
+            {"win32.postMessage", (args)=>{
+                if(int.TryParse(args[3], out int wpi)) return PostMessage(Pointers[args[0]], ToInt(args[1]), ToInt(args[2]), wpi).ToString();
+                return PostMessage(Pointers[args[0]], ToInt(args[1]), ToInt(args[2]), new StringBuilder(args[3])).ToString();
             } },
 
             {"win32.getHandleValue", (args)=>{
-                return Win32Handles[args[0]].ToInt64().ToString();
+                return Pointers[args[0]].ToInt64().ToString();
             } },
 
             {"win32.getHandle", (args)=>{
                 string name = "__WESH_WIN32_HANDLE_"+GetRandomName();
-                Win32Handles.Add(name, (IntPtr)ToInt(args[0]));
+                Pointers.Add(name, (IntPtr)ToInt(args[0]));
                 return name;
             } },
 
             {"win32.getForegroundWindow", (args)=>{
                 string name = "__WESH_WIN32_HANDLE_"+GetRandomName();
-                Win32Handles.Add(name, GetForegroundWindow());
+                Pointers.Add(name, GetForegroundWindow());
                 return name;
             } },
 
-            {"win32.clearHandles", (args)=>{
-                Win32Handles.Clear();
-                return "";
+            {"win32.callDll", (args)=>{
+                var funcArgs = new List<Argument>();
+
+                if(args.Length > 3){
+                    foreach(string ar in args.Skip(3)){
+                        string[] spl = ar.Split(':');
+
+                        if(spl.Length < 2){
+                            throw new Exception("Invalid format");
+                        }
+
+                        spl[0] = ShortNameToFullName(spl[0]);
+
+                        bool isWeshPointer = (spl[0] == "System.IntPtr" && Pointers.ContainsKey(spl[1]));
+
+                        try{
+                            funcArgs.Add(
+                                new Argument(
+                                    spl[0],
+                                    spl[0]=="System.IntPtr"?(isWeshPointer?Pointers[spl[1]]:new IntPtr(int.Parse(spl[1]))):System.Convert.ChangeType(String.Join(":", spl.Skip(1)), Type.GetType(spl[0]))
+                                )
+                            );
+                        }catch(FormatException){
+                            throw new Exception("Invalid format");
+                        }
+                    }
+                }
+
+                try{
+                    return DllCaller.CallFunction(args[0], args[1], ShortNameToFullName(args[2]), funcArgs).ToString();
+                }catch(ArgumentNullException){
+                    throw new Exception("Invalid DLL or function name");
+                }
             } },
 
             {"clipboard.get", (args)=>{
@@ -1349,8 +1481,66 @@ namespace wesh
         public static Dictionary<string, Dictionary<string, string>> UserObjects = new Dictionary<string, Dictionary<string, string>>();
         public static Dictionary<string, Control> Controls = new Dictionary<string, Control>();
         public static Dictionary<string, string> Functions = new Dictionary<string, string>();
-        public static Dictionary<string, IntPtr> Win32Handles = new Dictionary<string, IntPtr>();
+        public static Dictionary<string, IntPtr> Pointers = new Dictionary<string, IntPtr>();
         public static Dictionary<string, object> ComObjects = new Dictionary<string, object>();
+        public static Dictionary<string, Dictionary<string, string>> Classes = new Dictionary<string, Dictionary<string, string>>();
+
+        private static string ShortNameToFullName(string sn)
+        {
+            string name = sn;
+            if (name == "int") name = "System.Int32";
+            else if (name == "uint") name = "System.UInt32";
+            else if (name == "long") name = "System.Int64";
+            else if (name == "ulong") name = "System.UInt64";
+            else if (name == "double") name = "System.Double";
+            else if (name == "byte") name = "System.Byte";
+            else if (name == "intptr") name = "System.IntPtr";
+            else if (name == "char") name = "System.Char";
+            else if (name == "string") name = "System.String";
+            return name;
+        }
+
+        public static DialogResult InputBox(string promptText, string title, ref string value)
+        {
+            Form form = new Form();
+            Label label = new Label();
+            TextBox textBox = new TextBox();
+            Button buttonOk = new Button();
+            Button buttonCancel = new Button();
+
+            form.Text = title;
+            label.Text = promptText;
+            textBox.Text = value;
+
+            buttonOk.Text = "OK";
+            buttonCancel.Text = "Cancel";
+            buttonOk.DialogResult = DialogResult.OK;
+            buttonCancel.DialogResult = DialogResult.Cancel;
+
+            label.SetBounds(9, 10, 372, 13);
+            textBox.SetBounds(12, 36, 372, 20);
+            buttonOk.SetBounds(228, 72, 75, 23);
+            buttonCancel.SetBounds(309, 72, 75, 23);
+
+            label.AutoSize = true;
+            textBox.Anchor = textBox.Anchor | AnchorStyles.Right;
+            buttonOk.Anchor = AnchorStyles.Bottom | AnchorStyles.Right;
+            buttonCancel.Anchor = AnchorStyles.Bottom | AnchorStyles.Right;
+
+            form.ClientSize = new Size(396, 107);
+            form.Controls.AddRange(new Control[] { label, textBox, buttonOk, buttonCancel });
+            form.ClientSize = new Size(Math.Max(300, label.Right + 10), form.ClientSize.Height);
+            form.FormBorderStyle = FormBorderStyle.FixedDialog;
+            form.StartPosition = FormStartPosition.CenterScreen;
+            form.MinimizeBox = false;
+            form.MaximizeBox = false;
+            form.AcceptButton = buttonOk;
+            form.CancelButton = buttonCancel;
+
+            DialogResult dialogResult = form.ShowDialog();
+            value = textBox.Text;
+            return dialogResult;
+        }
 
         private static object GetProp(object obj, string name)
         {
@@ -1394,7 +1584,12 @@ namespace wesh
             if (name.Contains(Lang["objectDelim"]))
             {
                 string[] sp = name.Split(Lang["objectDelim"][0]);
-                if (Variables.ContainsKey(sp[0]) && UserObjects.ContainsKey(Variables[sp[0]]) && UserObjects[Variables[sp[0]]].ContainsKey(sp[1]))
+                
+                if (UserObjects.ContainsKey(sp[0]) && UserObjects[sp[0]].ContainsKey(sp[1]))
+                {
+                    return UserObjects[sp[0]][sp[1]];
+                }
+                else if (Variables.ContainsKey(sp[0]) && UserObjects.ContainsKey(Variables[sp[0]]) && UserObjects[Variables[sp[0]]].ContainsKey(sp[1]))
                 {
                     return UserObjects[Variables[sp[0]]][sp[1]];
                 }
@@ -1415,12 +1610,20 @@ namespace wesh
 
         public static void SetVariable(string name, string value)
         {
-            if (Constants.Contains(name)) throw new Exception(name + " является константой.");
-            if (name.Contains('.'))
+            if (Constants.Contains(name)) throw new Exception(name + " is a constant.");
+            if (name.Contains(Lang["objectDelim"]))
             {
-                string[] sp = name.Split('.');
-                if (!Variables.ContainsKey(sp[0]) || !UserObjects.ContainsKey(Variables[sp[0]])) throw new Exception("Объект не найден.");
-                if (UserObjects[Variables[sp[0]]].ContainsKey(sp[1]))
+                string[] sp = name.Split(Lang["objectDelim"][0]);
+
+                if (UserObjects.ContainsKey(sp[0]) && UserObjects[sp[0]].ContainsKey(sp[1]))
+                {
+                    UserObjects[sp[0]][sp[1]] = value;
+                }
+                else if (UserObjects.ContainsKey(sp[0]))
+                {
+                    UserObjects[sp[0]].Add(sp[1], value);
+                }
+                else if (UserObjects[Variables[sp[0]]].ContainsKey(sp[1]))
                 {
                     UserObjects[Variables[sp[0]]][sp[1]] = value;
                 }
@@ -1708,6 +1911,106 @@ wesh [-v] [-h] [-c <команда>] [-f <файл>]
             }
         }
 
+        public static string ParseQuotes(string cmd)
+        {
+            cmd = Regex.Replace(cmd, GetLangEl("codeBlockStart") + @"([^" + GetLangEl("codeBlockEnd") + @"]+)" + GetLangEl("codeBlockEnd"), new MatchEvaluator((m) =>
+            {
+                return m.Groups[1].Value.Replace(GetLangEl("q1"), "$Q1").Replace(GetLangEl("q2"), "$Q2").Replace(" ", "$SP").Replace(GetLangEl("argsDelim"), "$CM").Replace(GetLangEl("varOperator"), "$AT").Replace(GetLangEl("execOperator"), "$AM").Replace(GetLangEl("mathOperator"), "$PR");
+            }));
+            cmd = Regex.Replace(cmd, GetLangEl("q1") + @"([^" + GetLangEl("q1") + @"]*)" + GetLangEl("q1"), new MatchEvaluator((m) =>
+            {
+                return m.Groups[1].Value.Replace(GetLangEl("q2"), "$Q2").Replace(" ", "$SP").Replace(GetLangEl("argsDelim"), "$CM");
+            }));
+            cmd = Regex.Replace(cmd, GetLangEl("q2") + @"([^" + GetLangEl("q2") + "]*)" + GetLangEl("q2"), new MatchEvaluator((m) =>
+            {
+                return m.Groups[1].Value.Replace(GetLangEl("q1"), "$Q1").Replace(" ", "$SP").Replace(GetLangEl("argsDelim"), "$CM");
+            }));
+
+            return cmd;
+        }
+
+        public static string ParseArg(string arg)
+        {
+            if (arg.Trim().Length < 2) return arg;
+
+            arg = arg.Replace("$SP", " ");
+            arg = arg.Replace("$SM", Lang["cmdDelim"]);
+            arg = arg.Replace("$CM", Lang["argsDelim"]);
+            arg = arg.Replace("$Q1", Lang["q1"]);
+            arg = arg.Replace("$Q2", Lang["q2"]);
+            arg = arg.Replace("$CBS", Lang["codeBlockStart"]);
+            arg = arg.Replace("$CBE", Lang["codeBlockEnd"]);
+
+            if (arg.StartsWith(GetLangEl("doNotParseOperator")))
+            {
+                return arg.Substring(1);
+            }
+
+            if (arg[0] == Lang["execOperator"][0] && arg[1] != Lang["operatorBlockStart"][0])
+            {
+                return Exec(arg.Substring(1));
+            }
+
+            if (arg[0] == Lang["mathOperator"][0] && arg[1] != Lang["operatorBlockStart"][0])
+            {
+                return EvalJS(arg.Substring(1));
+            }
+
+            MatchCollection vbMatches = new Regex(GetLangEl("varOperator") + GetLangEl("operatorBlockStart") + "[^" + GetLangEl("operatorBlockEnd") + "]+" + GetLangEl("operatorBlockEnd")).Matches(arg);
+            if (vbMatches.Count > 0)
+            {
+                foreach (Match vbm in vbMatches)
+                {
+                    string val = vbm.Value;
+                    val = val.Replace(Lang["varOperator"] + Lang["operatorBlockStart"], "").Replace(Lang["operatorBlockEnd"], "");
+                    arg = arg.Replace(vbm.Value, GetVariable(val));
+                }
+            }
+
+            MatchCollection vMatches = new Regex(GetLangEl("varOperator") + @"[a-zA-Z0-9_" + GetLangEl("objectDelim") + "]+").Matches(arg);
+            if (vMatches.Count > 0)
+            {
+                foreach (Match m in vMatches)
+                {
+                    string val = m.Value;
+                    val = val.Replace(Lang["varOperator"], "");
+                    arg = arg.Replace(m.Value, GetVariable(val));
+                }
+            }
+
+            /*if(arg[0] == Lang["varOperator"][0] && arg[1] != Lang["operatorBlockStart"][0])
+            {
+                args[j] = GetVariable(arg.Substring(1));
+                continue;
+            }*/
+
+            MatchCollection eMatches = new Regex(GetLangEl("execOperator") + GetLangEl("operatorBlockStart") + "[^" + GetLangEl("operatorBlockEnd") + "]+" + GetLangEl("operatorBlockEnd")).Matches(arg);
+            if (eMatches.Count > 0)
+            {
+                foreach (Match em in eMatches)
+                {
+                    string val = em.Value;
+                    val = val.Replace(Lang["execOperator"] + Lang["operatorBlockStart"], "").Replace(Lang["operatorBlockEnd"], "");
+                    arg = arg.Replace(em.Value, Exec(val));
+                }
+            }
+
+            MatchCollection mMatches = new Regex(GetLangEl("mathOperator") + GetLangEl("operatorBlockStart") + "[^" + GetLangEl("operatorBlockEnd") + "]+" + GetLangEl("operatorBlockEnd")).Matches(arg);
+            if (mMatches.Count > 0)
+            {
+                foreach (Match mm in mMatches)
+                {
+                    string val = mm.Value;
+                    val = val.Replace(Lang["mathOperator"] + Lang["operatorBlockStart"], "").Replace(Lang["operatorBlockEnd"], "");
+                    arg = arg.Replace(mm.Value, EvalJS(val));
+                }
+            }
+
+            arg = arg.Replace("$AM", Lang["execOperator"]).Replace("$AT", Lang["varOperator"]).Replace("$PR", Lang["mathOperator"]);
+
+            return arg;
+        }
+
         public static string Exec(string cmd)
         {
             string ret = "";
@@ -1732,18 +2035,7 @@ wesh [-v] [-h] [-c <команда>] [-f <файл>]
 
                 cmd = cmd.Trim().Replace("\\" + Lang["codeBlockStart"], "$CBS").Replace("\\"+Lang["codeBlockEnd"], "$CBE");
 
-                cmd = Regex.Replace(cmd, GetLangEl("codeBlockStart") + @"([^" + GetLangEl("codeBlockEnd") + @"]+)" + GetLangEl("codeBlockEnd"), new MatchEvaluator((m) =>
-                {
-                    return m.Groups[1].Value.Replace(GetLangEl("q1"), "$Q1").Replace(GetLangEl("q2"), "$Q2").Replace(" ", "$SP").Replace(GetLangEl("argsDelim"), "$CM").Replace(GetLangEl("varOperator"), "$AT").Replace(GetLangEl("execOperator"), "$AM").Replace(GetLangEl("mathOperator"), "$PR");
-                }));
-                cmd = Regex.Replace(cmd, GetLangEl("q1") + @"([^" + GetLangEl("q1") + @"]*)" + GetLangEl("q1"), new MatchEvaluator((m) =>
-                {
-                    return m.Groups[1].Value.Replace(GetLangEl("q2"), "$Q2").Replace(" ", "$SP").Replace(GetLangEl("argsDelim"), "$CM");
-                }));
-                cmd = Regex.Replace(cmd, GetLangEl("q2") + @"([^" + GetLangEl("q2") + "]*)" + GetLangEl("q2"), new MatchEvaluator((m) =>
-                {
-                    return m.Groups[1].Value.Replace(GetLangEl("q1"), "$Q1").Replace(" ", "$SP").Replace(GetLangEl("argsDelim"), "$CM");
-                }));
+                cmd = ParseQuotes(cmd);
 
                 cmd = cmd.Replace(GetLangEl("argsDelim"), "");
                 args = cmd.Split(' ').ToList();
@@ -1760,114 +2052,40 @@ wesh [-v] [-h] [-c <команда>] [-f <файл>]
 
                 for (int j = 0; j < args.Count; j++)
                 {
-                    string arg = args[j];
-
-                    if (arg.Trim().Length < 2) continue;
-
-                    arg = arg.Replace("$SP", " ");
-                    arg = arg.Replace("$SM", Lang["cmdDelim"]);
-                    arg = arg.Replace("$CM", Lang["argsDelim"]);
-                    arg = arg.Replace("$Q1", Lang["q1"]);
-                    arg = arg.Replace("$Q2", Lang["q2"]);
-                    arg = arg.Replace("$CBS", Lang["codeBlockStart"]);
-                    arg = arg.Replace("$CBE", Lang["codeBlockEnd"]);
-                    arg = arg.Replace("$PR", Lang["mathOperator"]);
-
-                    if (arg.StartsWith(GetLangEl("doNotParseOperator")))
-                    {
-                        arg = arg.Substring(1);
-                        args[j] = arg;
-                        continue;
-                    }
-
-                    if (arg[0] == Lang["execOperator"][0] && arg[1] != Lang["operatorBlockStart"][0])
-                    {
-                        args[j] = Exec(arg.Substring(1));
-                        continue;
-                    }
-
-                    if (arg[0] == Lang["mathOperator"][0] && arg[1] != Lang["operatorBlockStart"][0])
-                    {
-                        args[j] = EvalJS(arg.Substring(1));
-                        continue;
-                    }
-
-                    /*if(arg[0] == Lang["varOperator"][0] && arg[1] != Lang["operatorBlockStart"][0])
-                    {
-                        args[j] = GetVariable(arg.Substring(1));
-                        continue;
-                    }*/
-
-                    MatchCollection eMatches = new Regex(GetLangEl("execOperator") + GetLangEl("operatorBlockStart") + "[^" + GetLangEl("operatorBlockEnd") + "]+" + GetLangEl("operatorBlockEnd")).Matches(arg);
-                    if (eMatches.Count > 0)
-                    {
-                        foreach (Match em in eMatches)
-                        {
-                            string val = em.Value;
-                            val = val.Replace(Lang["execOperator"] + Lang["operatorBlockStart"], "").Replace(Lang["operatorBlockEnd"], "");
-                            arg = arg.Replace(em.Value, Exec(val));
-                        }
-                    }
-
-                    MatchCollection mMatches = new Regex(GetLangEl("mathOperator") + GetLangEl("operatorBlockStart") + "[^" + GetLangEl("operatorBlockEnd") + "]+" + GetLangEl("operatorBlockEnd")).Matches(arg);
-                    if (mMatches.Count > 0)
-                    {
-                        foreach (Match mm in mMatches)
-                        {
-                            string val = mm.Value;
-                            val = val.Replace(Lang["mathOperator"] + Lang["operatorBlockStart"], "").Replace(Lang["operatorBlockEnd"], "");
-                            arg = arg.Replace(mm.Value, EvalJS(val));
-                        }
-                    }
-
-                    MatchCollection vbMatches = new Regex(GetLangEl("varOperator") + GetLangEl("operatorBlockStart") + "[^" + GetLangEl("operatorBlockEnd") + "]+" + GetLangEl("operatorBlockEnd")).Matches(arg);
-                    if (vbMatches.Count > 0)
-                    {
-                        foreach (Match vbm in vbMatches)
-                        {
-                            string val = vbm.Value;
-                            val = val.Replace(Lang["varOperator"] + Lang["operatorBlockStart"], "").Replace(Lang["operatorBlockEnd"], "");
-                            arg = arg.Replace(vbm.Value, GetVariable(val));
-                        }
-                    }
-
-                    MatchCollection vMatches = new Regex(GetLangEl("varOperator") + @"[a-zA-Z0-9_" + GetLangEl("objectDelim") + "]+").Matches(arg);
-                    if (vMatches.Count > 0)
-                    {
-                        foreach (Match m in vMatches)
-                        {
-                            string val = m.Value;
-                            val = val.Replace(Lang["varOperator"], "");
-                            arg = arg.Replace(m.Value, GetVariable(val));
-                        }
-                    }
-
-                    arg = arg.Replace("$AM", Lang["execOperator"]).Replace("$AT", Lang["varOperator"]);
-
-                    args[j] = arg;
+                    args[j] = ParseArg(args[j]);
                 }
 
                 if (!Commands.ContainsKey(cmd))
                 {
+                    if (Functions.ContainsKey(ParseArg(cmd)))
+                    {
+                        string code = Functions[ParseArg(cmd)];
+                        SetVariable("funcArgs", CreateArray(args.ToArray()));
+                        return Exec(code);
+                    }
+
                     if (args.Count > 0)
                     {
                         if(args[0] == "=")
                         {
-                            SetVariable(cmd, String.Join(" ", args.Skip(1)));
+                            SetVariable(ParseArg(cmd), String.Join(" ", args.Skip(1)));
+                            return "";
                         }
                         else if(args[0] == "=&")
                         {
-                            SetVariable(cmd, Exec(String.Join(" ", args.Skip(1))));
+                            SetVariable(ParseArg(cmd), Exec(String.Join(" ", args.Skip(1))));
+                            return "";
                         }
                         else if(args[0] == "=@")
                         {
-                            SetVariable(cmd, GetVariable(String.Join(" ", args.Skip(1))));
+                            SetVariable(ParseArg(cmd), GetVariable(String.Join(" ", args.Skip(1))));
+                            return "";
                         }
                         else if(args[0] == "=%")
                         {
-                            SetVariable(cmd, EvalJS(args[1]));
+                            SetVariable(ParseArg(cmd), EvalJS(args[1]));
+                            return "";
                         }
-                        return "";
                     }
 
                     string msg = $"ERROR: \"{cmd}\" command not found";
