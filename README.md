@@ -12,3 +12,11 @@ wesh - расширяемая оболочка командной строки �
 
 ## Документация
 Документация wesh доступна на [GitHub Pages](https://nekit270ch.github.io/wesh).
+
+## Сборка
+### Сборка с помощью Visual Studio
+Откройте в Visual Studio 2022 файл `src\wesh.sln`.
+### Сборка из командной строки
+С помощью компилятора CSC wesh можно собрать следующими командами (предполагается, что она будет запущена в папке `src`):
+64-bit: `csc /nologo /r:Microsoft.JScript.dll,System.IO.Compression.FileSystem.dll /platform:x64 /out:wesh.exe *.cs`
+32-bit: `csc /nologo /r:Microsoft.JScript.dll,System.IO.Compression.FileSystem.dll /platform:x86 /out:wesh_x86.exe *.cs`
