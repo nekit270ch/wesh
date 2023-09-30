@@ -44,7 +44,20 @@ namespace wesh
                         WESH.SetVariable("scriptPath", fileName);
                         WESH.SetVariable("scriptDir", Path.GetDirectoryName(fileName));
 
-                        WESH.ExecScript(File.ReadAllText(args[1]));
+                        WESH.ExecScript(File.ReadAllText(fileName));
+                        break;
+                    }
+                case "-p":
+                    {
+                        string fileName = WESH.GetPath(args[1]);
+
+                        if (fileName == null)
+                        {
+                            Console.WriteLine($"Файл \"{args[1]}\" не найден.");
+                            Environment.Exit(1);
+                        }
+
+                        Console.Write(String.Join(Environment.NewLine, WESH.PrepareScript(File.ReadAllText(fileName))));
                         break;
                     }
                 case "-v":

@@ -59,6 +59,9 @@ namespace wesh
         [DllImport("user32.dll", CharSet = CharSet.Auto, CallingConvention = CallingConvention.StdCall)]
         private static extern void keybd_event(byte bVk, byte bScan, ulong dwFlags, int extraInfo);
 
+        [DllImport("winmm.dll", CharSet = CharSet.Auto, CallingConvention = CallingConvention.StdCall)]
+        public static extern uint mciSendString(string lpstrCommand, StringBuilder lpstrReturnString, int uReturnLength, IntPtr hWndCallback);
+
         private struct W32Rect
         {
             public int Left { get; set; }
@@ -71,8 +74,8 @@ namespace wesh
 
         public delegate string Command(string[] args);
 
-        public const double Version = 1.5;
-        public const string VersionStr = "WESH v1.5";
+        public const double Version = 1.6;
+        public const string VersionStr = "WESH v1.6";
         public const string WeshNull = "__WESH_NULL";
         public static readonly string WeshPath = Process.GetCurrentProcess().MainModule.FileName;
         public static readonly string WeshDir = new FileInfo(Process.GetCurrentProcess().MainModule.FileName).Directory.FullName;
@@ -89,6 +92,10 @@ namespace wesh
             } },
 
             {"echo", (args)=>{
+                return args[0];
+            } },
+
+            {"return", (args)=>{
                 return args[0];
             } },
 
@@ -258,12 +265,7 @@ namespace wesh
             } },
 
             {"f", (args)=>{
-                if(!Functions.ContainsKey(args[0])) return "";
-                string code = Functions[args[0]];
-
-                SetVariable("funcArgs", CreateArray(args.Skip(1).ToArray()));
-
-                return Exec(code);
+                return ExecFunction(args[0], args.Skip(1).ToArray());
             } },
 
             {"clear", (args)=>{
@@ -377,8 +379,12 @@ namespace wesh
                 return rand.Next(ToInt(args[0]), ToInt(args[1])).ToString();
             } },
 
+            {"js", (args)=>{
+                return EvalJS(Regex.Replace(args[0], $@"[\\]{{1,}}([{GetLangEl("codeBlockStart")}{GetLangEl("codeBlockEnd")}{GetLangEl("cmdDelim")}]{{1}})", "$1"));
+            } },
+
             {"cmd.list", (args)=>{
-                return String.Join(Environment.NewLine, Commands.Keys.ToArray());
+                return CreateArray(Commands.Keys.ToArray());
             } },
 
             {"cmd.fromFunc", (args)=>{
@@ -448,9 +454,16 @@ namespace wesh
                 return CreateArray(args[0].Split(args[1][0]));
             } },
 
+            {"str.toBase64", (args)=>{
+                return ToBase64(args[0]);
+            } },
+
+            {"str.fromBase64", (args)=>{
+                return FromBase64(args[1]);
+            } },
+
             {"fs.readFile", (args)=>{
                 string p = GetPath(args[0]);
-                if(!File.Exists(p)) return $"Файл \"{p}\" не найден.";
                 return File.ReadAllText(p);
             } },
 
@@ -541,7 +554,7 @@ namespace wesh
                         list[i] = Path.GetFileName(list[i]);
                     }
                 }
-                return String.Join(Environment.NewLine, list);
+                return CreateArray(list.ToArray());
             } },
 
             {"reg.createKey", (args)=>{
@@ -710,18 +723,16 @@ namespace wesh
                     {
                         string funcCode = Functions[kvp.Value];
                         string newName = "__WESH_FUNCTION_"+GetRandomName();
-                        funcCode = funcCode.Replace("this.", name + ".");
+                        funcCode = funcCode.Replace(Lang["thisKeyword"] + ".", name + ".");
                         Functions.Add(newName, funcCode);
                         val = newName;
                     }
                     obj.Add(kvp.Key, val);
                 }
 
-                if (obj.ContainsKey("constructor"))
+                if (obj.ContainsKey(Lang["constructorKeyword"]))
                 {
-                    string code = Functions[obj["constructor"]];
-                    SetVariable("funcArgs", CreateArray(args.Skip(1).ToArray()));
-                    Exec(code);
+                    ExecFunction(obj[Lang["constructorKeyword"]], args.Skip(1).ToArray());
                 }
 
                 obj.Add("_class", args[0]);
@@ -817,6 +828,10 @@ namespace wesh
                 return r;
             } },
 
+            {"arr.join", (args)=>{
+                return String.Join(args[1], WeshArrayToArray(args[0]));
+            } },
+            
             {"module.install", (args)=>{
                 string addr = Variables["modulesUrl"].Replace("MODULE_NAME", args[0]);
                 new WebClient().DownloadFile(addr, Variables["modulesDir"] + "\\" + args[0] + ".weshm");
@@ -1328,7 +1343,7 @@ namespace wesh
                             throw new Exception("Invalid format");
                         }
 
-                        spl[0] = ShortNameToFullName(spl[0]);
+                        spl[0] = ShortTypeNameToFull(spl[0]);
 
                         bool isWeshPointer = (spl[0] == "System.IntPtr" && Pointers.ContainsKey(spl[1]));
 
@@ -1346,7 +1361,7 @@ namespace wesh
                 }
 
                 try{
-                    return DllCaller.CallFunction(args[0], args[1], ShortNameToFullName(args[2]), funcArgs).ToString();
+                    return DllCaller.CallFunction(args[0], args[1], ShortTypeNameToFull(args[2]), funcArgs).ToString();
                 }catch(ArgumentNullException){
                     throw new Exception("Invalid DLL or function name");
                 }
@@ -1384,7 +1399,7 @@ namespace wesh
                 {
                     SetProp(ComObjects[args[0]], args[1], args[2]);
                 }
-                
+
                 return "";
             } },
 
@@ -1438,6 +1453,155 @@ namespace wesh
                 }
                 File.WriteAllBytes(GetPath(args[1], true), bs.ToArray());
                 return "";
+            } },
+
+            {"barr.fromBase64String", (args)=>{
+                List<string> ss = new List<string>();
+                byte[] bs = System.Convert.FromBase64String(args[0]);
+                foreach(byte b in bs)
+                {
+                    ss.Add(b.ToString());
+                }
+                return CreateArray(ss.ToArray());
+            } },
+
+            {"barr.toBase64String", (args)=>{
+                List<byte> bs = new List<byte>();
+                string[] ss = WeshArrayToArray(args[0]);
+                foreach(string s in ss)
+                {
+                    bs.Add(byte.Parse(s));
+                }
+                return System.Convert.ToBase64String(bs.ToArray());
+            } },
+
+            {"ptr.alloc", (args)=>{
+                string name = "__WESH_POINTER_"+GetRandomName();
+                Pointers.Add(name, Marshal.AllocHGlobal(ToInt(args[0]) == 0?Marshal.SizeOf(Type.GetType(ShortTypeNameToFull(args[0]))):ToInt(args[0])));
+                return name;
+            } },
+
+            {"ptr.read", (args)=>{
+                string type = ShortTypeNameToFull(args[1]);
+                IntPtr ptr = Pointers[args[0]];
+                int off = (args.Length>2?ToInt(args[2]):0);
+
+                if(type == "System.Byte")
+                {
+                    return Marshal.ReadByte(ptr, off).ToString();
+                }
+                else if(type == "System.Int16")
+                {
+                    return Marshal.ReadInt16(ptr, off).ToString();
+                }
+                else if(type == "System.Int32")
+                {
+                    return Marshal.ReadInt32(ptr, off).ToString();
+                }
+                else if(type == "System.Int64")
+                {
+                    return Marshal.ReadInt64(ptr, off).ToString();
+                }
+                else if(type == "System.Char")
+                {
+                    return ((char)Marshal.ReadByte(ptr, off)).ToString();
+                }
+                else if(type == "System.String")
+                {
+                    StringBuilder builder = new StringBuilder();
+
+                    for(int i = off; ; i++)
+                    {
+                        byte bt = Marshal.ReadByte(ptr, i);
+
+                        if(bt == 0)  break;
+                        else builder.Append((char)bt);
+                    }
+
+                    return builder.ToString();
+                }
+
+                return "";
+            } },
+
+            {"ptr.write", (args)=>{
+                string type = ShortTypeNameToFull(args[1]);
+                IntPtr ptr = Pointers[args[0]];
+                int off = ToInt(args[2]);
+
+                if(type == "System.Byte")
+                {
+                    Marshal.WriteByte(ptr, off, byte.Parse(args[3]));
+                }
+                else if(type == "System.Int16")
+                {
+                    Marshal.WriteInt16(ptr, short.Parse(args[3]));
+                }
+                else if(type == "System.Int32")
+                {
+                    Marshal.WriteInt32(ptr, int.Parse(args[3]));
+                }
+                else if(type == "System.Int64")
+                {
+                    Marshal.WriteInt64(ptr, long.Parse(args[3]));
+                }
+                else if(type == "System.Char")
+                {
+                    Marshal.WriteByte(ptr, (byte)args[3][0]);
+                }
+                else if(type == "System.String")
+                {
+                    for(int i = 0; i < args[3].Length; i++)
+                    {
+                        Marshal.WriteByte(ptr, off + i, (byte)args[3][i]);
+                    }
+                    Marshal.WriteByte(ptr, off + args[3].Length, 0);
+                }
+
+                return "";
+            } },
+
+            {"audio.open", (args)=>{
+                string name = "__WESH_PLAYER_"+GetRandomName();
+
+                if (!File.Exists(GetPath(args[0])))
+                {
+                    throw new FileNotFoundException();
+                }
+
+                mciSendString($"open \"{GetPath(args[0])}\" alias {name}", null, 0, IntPtr.Zero);
+
+                return name;
+            } },
+
+            {"audio.close", (args)=>{
+                mciSendString($"close {args[0]}", null, 0, IntPtr.Zero);
+                return "";
+            } },
+
+            {"audio.play", (args)=>{
+                mciSendString($"play {args[0]}{(args.Length>1?" "+args[1]:"")}", null, 0, IntPtr.Zero);
+                return "";
+            } },
+
+            {"audio.stop", (args)=>{
+                mciSendString($"stop {args[0]}", null, 0, IntPtr.Zero);
+                return "";
+            } },
+
+            {"audio.pause", (args)=>{
+                mciSendString($"pause {args[0]}", null, 0, IntPtr.Zero);
+                return "";
+            } },
+
+            {"audio.resume", (args)=>{
+                mciSendString($"resume {args[0]}", null, 0, IntPtr.Zero);
+                return "";
+            } },
+
+            {"audio.sendMCI", (args)=>{
+                mciSendString(args[0], null, 0, IntPtr.Zero);
+                return "";
             } }
         };
 
@@ -1457,6 +1621,9 @@ namespace wesh
             { "execOperator", "&" },
             { "mathOperator", "%" },
             { "doNotParseOperator", "~" },
+            { "thisKeyword", "this" },
+            { "returnKeyword", "return" },
+            { "constructorKeyword", "constructor" }
         };
 
         public static Dictionary<string, string> Variables = new Dictionary<string, string>()
@@ -1465,6 +1632,7 @@ namespace wesh
             { "error", "" },
             { "newLine", Environment.NewLine },
             { "errorAction", "none" },
+            { "stopOnError", "false" },
             { "weshVer", Version.ToString() },
             { "weshDir", WeshDir },
             { "weshPath", WeshPath },
@@ -1485,7 +1653,7 @@ namespace wesh
         public static Dictionary<string, object> ComObjects = new Dictionary<string, object>();
         public static Dictionary<string, Dictionary<string, string>> Classes = new Dictionary<string, Dictionary<string, string>>();
 
-        private static string ShortNameToFullName(string sn)
+        private static string ShortTypeNameToFull(string sn)
         {
             string name = sn;
             if (name == "int") name = "System.Int32";
@@ -1788,7 +1956,7 @@ wesh [-v] [-h] [-c <команда>] [-f <файл>]
         [-v]                       Выводит версию WESH.
         [-h]                       Выводит справочное сообщение.
         [-c <команда>]             Выполняет указанную команду.
-        [-f <файл>] <аргументы>    Выполняет скрипт.
+        [-f <файл> <аргументы>]    Выполняет скрипт.
 ");
         }
 
@@ -2011,7 +2179,18 @@ wesh [-v] [-h] [-c <команда>] [-f <файл>]
             return arg;
         }
 
+        public static string ExecFunction(string name, string[] args)
+        {
+            SetVariable("funcArgs", CreateArray(args));
+            return Exec(Functions[name], true);
+        }
+
         public static string Exec(string cmd)
+        {
+            return Exec(cmd, false);
+        }
+
+        public static string Exec(string cmd, bool isFunc)
         {
             string ret = "";
             try
@@ -2026,9 +2205,15 @@ wesh [-v] [-h] [-c <команда>] [-f <файл>]
                 if(cs.Length > 1)
                 {
                     string r = "";
-                    foreach(string c in cs)
+                    foreach(string cm in cs)
                     {
-                        if (c.Trim().Length > 0 && c.Trim() != Lang["cmdDelim"]) r += Exec(c.Replace("\\" + Lang["cmdDelim"], Lang["cmdDelim"])) + Environment.NewLine;
+                        string c = cm;
+                        if (c.Trim().Length > 0 && c.Trim() != Lang["cmdDelim"])
+                        {
+                            bool isr = !isFunc || c.Trim().StartsWith("return ");
+                            string exr = Exec(c.Replace("\\" + Lang["cmdDelim"], Lang["cmdDelim"]));
+                            if (isr && exr.Trim().Length > 0) r += exr + Environment.NewLine;
+                        }
                     }
                     return r;
                 }
@@ -2059,9 +2244,7 @@ wesh [-v] [-h] [-c <команда>] [-f <файл>]
                 {
                     if (Functions.ContainsKey(ParseArg(cmd)))
                     {
-                        string code = Functions[ParseArg(cmd)];
-                        SetVariable("funcArgs", CreateArray(args.ToArray()));
-                        return Exec(code);
+                        return ExecFunction(ParseArg(cmd), args.ToArray());
                     }
 
                     if (args.Count > 0)
@@ -2094,7 +2277,12 @@ wesh [-v] [-h] [-c <команда>] [-f <файл>]
                     string errAct = GetVariable("errorAction");
                     if (errAct == "print") Console.WriteLine(msg);
                     else if (errAct == "msgbox") MessageBox.Show(msg, "wesh", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                    else if (errAct.StartsWith("func:")) Exec(Functions[errAct.Replace("func:", "")]);
+                    else if (errAct.StartsWith("func:")) ExecFunction(errAct.Replace("func:", ""), new string[] { });
+
+                    if (GetVariable("stopOnError") == "true")
+                    {
+                        Environment.Exit(1);
+                    }
 
                     return msg;
                 }
@@ -2109,22 +2297,24 @@ wesh [-v] [-h] [-c <команда>] [-f <файл>]
                 string errAct = GetVariable("errorAction");
                 if (errAct == "print") Console.WriteLine(ret);
                 else if (errAct == "msgbox") MessageBox.Show(ret, "wesh", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                else if (errAct.StartsWith("func:")) Exec(Functions[errAct.Replace("func:", "")]);
+                else if (errAct.StartsWith("func:")) ExecFunction(errAct.Replace("func:", ""), new string[] { });
+
+                if (GetVariable("stopOnError") == "true")
+                {
+                    Environment.Exit(1);
+                }
             }
             return ret;
         }
 
-        public static string ExecScript(string rawCode)
+        public static string[] PrepareScript(string rawCode)
         {
-            string output = "";
             rawCode = rawCode.Replace("\r\n", "\n");
             rawCode = rawCode.Replace("\r", "\n");
             rawCode = Regex.Replace(rawCode, $@"\n[\s]*{GetLangEl("comment")}.*\n", "\n");
-            //rawCode = Regex.Replace(rawCode, $@"(\n(?=[^{GetLangEl("codeBlockStart")}]*{GetLangEl("codeBlockEnd")}))", " ; ");
-            //rawCode = Regex.Replace(rawCode, $@"((?=[^{GetLangEl("codeBlockStart")}]*{GetLangEl("codeBlockEnd")})\n)", " ; ");
 
             int bCount = 0;
-            for(int i = 0; i < rawCode.Length; i++)
+            for (int i = 0; i < rawCode.Length; i++)
             {
                 char ch = rawCode[i];
 
@@ -2136,7 +2326,7 @@ wesh [-v] [-h] [-c <команда>] [-f <файл>]
                         sb[i] = ' ';
                         rawCode = sb.ToString();
                         rawCode = rawCode.Insert(i, $" {new string('\\', bCount)}{Lang["cmdDelim"]} ");
-                        i += 3+bCount;
+                        i += 3 + bCount;
                     }
                 }
 
@@ -2153,32 +2343,34 @@ wesh [-v] [-h] [-c <команда>] [-f <файл>]
                 {
                     if (bCount != 0)
                     {
-                        rawCode = rawCode.Insert(i, new string('\\', bCount-1));
-                        i += bCount-1;
+                        rawCode = rawCode.Insert(i, new string('\\', bCount - 1));
+                        i += bCount - 1;
                     }
                     bCount--;
                 }
-                if(ch == Lang["cmdDelim"][0])
+                if (ch == Lang["cmdDelim"][0])
                 {
                     if (bCount != 0)
                     {
-                        Console.WriteLine(bCount);
                         rawCode = rawCode.Insert(i, new string('\\', bCount));
                         i += bCount;
                     }
                 }
             }
 
-            //Console.WriteLine(rawCode + "\n");
-
-            rawCode = Regex.Replace(rawCode, $@"([\\]*){GetLangEl("codeBlockStart")}[\s]*([\\]*){GetLangEl("cmdDelim")}", "$1"+Lang["codeBlockStart"]);
+            rawCode = Regex.Replace(rawCode, $@"([\\]*){GetLangEl("codeBlockStart")}[\s]*([\\]*){GetLangEl("cmdDelim")}", "$1" + Lang["codeBlockStart"]);
             rawCode = Regex.Replace(rawCode, $@"{GetLangEl("codeBlockStart")}[\s]*\n", Lang["codeBlockStart"]);
             rawCode = Regex.Replace(rawCode, GetLangEl("cmdDelim") + "[\\s]*\\n", GetLangEl("cmdDelim"));
-            rawCode = Regex.Replace(rawCode, $@"([\\]*){GetLangEl("cmdDelim")}[\s]*([\\]*){GetLangEl("codeBlockEnd")}", " $2"+Lang["codeBlockEnd"]);
-            //Console.WriteLine(rawCode);
-            //return "";
+            rawCode = Regex.Replace(rawCode, $@"([\\]*){GetLangEl("cmdDelim")}[\s]*([\\]*){GetLangEl("codeBlockEnd")}", " $2" + Lang["codeBlockEnd"]);
 
-            string[] code = rawCode.Split('\n');
+            return rawCode.Split('\n');
+        }
+
+        public static string ExecScript(string rawCode)
+        {
+            string[] code = PrepareScript(rawCode);
+            string output = "";
+
             foreach (string line in code)
             {
                 if (line.Trim().Length == 0 || line.Trim()[0] == Lang["comment"][0]) continue;
