@@ -173,8 +173,8 @@ namespace wesh
                 foreach(string arg in args)
                 {
                     string code = "";
-                    if(GetPath(arg) != null) code = File.ReadAllText(GetPath(arg));
-                    else if(arg.StartsWith("http")) code = new WebClient().DownloadString(arg);
+                    if((arg.EndsWith(".wesh") || arg.EndsWith(".weshm")) && GetPath(arg) != null) code = File.ReadAllText(GetPath(arg));
+                    else if(arg.StartsWith("http")) code = GetRequest(arg);
                     else
                     {
                         string name = Variables["modulesDir"] + "\\" + args[0] + ".weshm";
@@ -1958,6 +1958,15 @@ namespace wesh
 
         private static string GetRequest(string url)
         {
+            if (url.StartsWith("https://"))
+            {
+                ServicePointManager.SecurityProtocol = SecurityProtocolType.Ssl3 | SecurityProtocolType.Tls | SecurityProtocolType.Tls11 | SecurityProtocolType.Tls12;
+            }
+            else
+            {
+                ServicePointManager.SecurityProtocol = SecurityProtocolType.SystemDefault;
+            }
+
             var req = WebRequest.Create(url);
 
             var res = (HttpWebResponse)req.GetResponse();
@@ -1969,6 +1978,15 @@ namespace wesh
 
         private static string PostRequest(string url, string data)
         {
+            if (url.StartsWith("https://"))
+            {
+                ServicePointManager.SecurityProtocol = SecurityProtocolType.Ssl3 | SecurityProtocolType.Tls | SecurityProtocolType.Tls11 | SecurityProtocolType.Tls12;
+            }
+            else
+            {
+                ServicePointManager.SecurityProtocol = SecurityProtocolType.SystemDefault;
+            }
+
             var req = WebRequest.Create(url);
 
             var pd = Encoding.ASCII.GetBytes(data);
