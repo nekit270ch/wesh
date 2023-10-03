@@ -14,6 +14,8 @@ using Microsoft.JScript;
 using System.Security.Principal;
 using Microsoft.Win32;
 using System.IO.Compression;
+using System.CodeDom.Compiler;
+using Microsoft.CSharp;
 using DllCallerLib;
 using DllInjectorLib;
 
@@ -78,8 +80,8 @@ namespace wesh
 
         public delegate string Command(string[] args);
 
-        public const double Version = 1.7;
-        public const string VersionStr = "WESH v1.7";
+        public const double Version = 1.8;
+        public const string VersionStr = "WESH v1.8";
         public const string WeshNull = "__WESH_NULL";
         public static readonly string WeshPath = Process.GetCurrentProcess().MainModule.FileName;
         public static readonly string WeshDir = new FileInfo(Process.GetCurrentProcess().MainModule.FileName).Directory.FullName;
@@ -198,14 +200,11 @@ namespace wesh
             } },
 
             {"ife", (args)=>{
-                if (Cond(Exec(args[0])))
-                {
-                    return Exec(args[1]);
-                }
-                else
-                {
-                    return args.Length > 2?Exec(args[2]):"";
-                }
+                string cmd = args[0]=="!"?args[1]:args[0];
+                string code = args[0]=="!"?args[2]:args[1];
+
+                if (Exec(cmd) == (args[0]=="!"?"false":"true")) return Exec(code);
+                return args.Length>(args[0]=="!"?3:2)?Exec(args[0]=="!"?args[3]:args[2]):"";
             } },
 
             {"while", (args)=>{
@@ -222,7 +221,7 @@ namespace wesh
                 string cmd = args[0]=="!"?args[1]:args[0];
                 string code = args[0]=="!"?args[2]:args[1];
 
-                while (Exec(cmd) == (args[0]=="!"?"true":"false"))
+                while (Exec(cmd) == (args[0]=="!"?"false":"true"))
                 {
                     r += Exec(code)+Environment.NewLine;
                 }
@@ -398,6 +397,42 @@ namespace wesh
 
             {"js", (args)=>{
                 return EvalJS(Regex.Replace(args[0], $@"[\\]{{1,}}([{GetLangEl("codeBlockStart")}{GetLangEl("codeBlockEnd")}{GetLangEl("cmdDelim")}]{{1}})", "$1"));
+            } },
+
+            {"cs", (args)=>{
+                string code = args[0];
+                if(args[1] == "true") code = Regex.Replace(args[0], $@"[\\]{{1,}}([{GetLangEl("codeBlockStart")}{GetLangEl("codeBlockEnd")}{GetLangEl("cmdDelim")}]{{1}})", "$1");
+                string[] enPoint = args[2].Split('.');
+                string[] refAsm = args[3].Split(',');
+                string[] mArgs = args.Skip(4).ToArray();
+
+                var prov = new CSharpCodeProvider();
+
+                var cParams = new CompilerParameters();
+                cParams.GenerateExecutable = false;
+                cParams.GenerateInMemory = true;
+                cParams.ReferencedAssemblies.AddRange(new string[]{ "mscorlib.dll", "system.dll" });
+                if(refAsm.Length > 0) cParams.ReferencedAssemblies.AddRange(refAsm);
+
+                var res = prov.CompileAssemblyFromSource(cParams, code);
+
+                if (res.Errors.HasErrors)
+                {
+                    string r = "";
+                    foreach(CompilerError err in res.Errors)
+                    {
+                        r += $"Compiler error: {err.ErrorText} at line {err.Line}{Environment.NewLine}";
+                    }
+                    throw new Exception(r);
+                }
+
+                var asm = res.CompiledAssembly;
+                var method = asm.GetType(enPoint[0]).GetMethod(enPoint[1]);
+
+                var ret = method.Invoke(null, mArgs);
+
+                if(ret == null) return "";
+                return ret.ToString();
             } },
 
             {"cmd.list", (args)=>{
@@ -1024,19 +1059,14 @@ namespace wesh
             } },
 
             {"proc.kill", (args)=>{
-                var ps = Process.GetProcessesByName(args[0]);
-                foreach(Process p in ps)
-                {
-                    p.Kill();
-                }
+                Process.GetProcessById(ToInt(args[0])).Kill();
                 return "";
             } },
 
             {"proc.getInfo", (args)=>{
                 string handleName = "__WESH_WIN32_HANDLE_"+GetRandomName();
 
-                var ps = Process.GetProcessesByName(args[0]);
-                var p = ps[0];
+                var p = Process.GetProcessById(ToInt(args[0]));
 
                 Pointers.Add(handleName, p.MainWindowHandle);
 
