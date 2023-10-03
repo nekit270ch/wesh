@@ -15,6 +15,7 @@ using System.Security.Principal;
 using Microsoft.Win32;
 using System.IO.Compression;
 using DllCallerLib;
+using DllInjectorLib;
 
 namespace wesh
 {
@@ -22,6 +23,9 @@ namespace wesh
     {
         [DllImport("user32.dll", CharSet = CharSet.Auto, CallingConvention = CallingConvention.StdCall)]
         private static extern bool SetForegroundWindow(IntPtr hWnd);
+
+        [DllImport("user32.dll", CharSet = CharSet.Auto, CallingConvention = CallingConvention.StdCall)]
+        private static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
 
         [DllImport("user32.dll", CharSet = CharSet.Auto, CallingConvention = CallingConvention.StdCall)]
         private static extern void mouse_event(long dwFlags, long dx, long dy, long cButtons, long dwExtraInfo);
@@ -74,8 +78,8 @@ namespace wesh
 
         public delegate string Command(string[] args);
 
-        public const double Version = 1.6;
-        public const string VersionStr = "WESH v1.6";
+        public const double Version = 1.7;
+        public const string VersionStr = "WESH v1.7";
         public const string WeshNull = "__WESH_NULL";
         public static readonly string WeshPath = Process.GetCurrentProcess().MainModule.FileName;
         public static readonly string WeshDir = new FileInfo(Process.GetCurrentProcess().MainModule.FileName).Directory.FullName;
@@ -208,7 +212,19 @@ namespace wesh
                 string r = "";
                 while (Cond(args[0]))
                 {
-                    r += Exec(args[1])+"\n";
+                    r += Exec(args[1])+Environment.NewLine;
+                }
+                return r;
+            } },
+
+            {"whilee", (args)=>{
+                string r = "";
+                string cmd = args[0]=="!"?args[1]:args[0];
+                string code = args[0]=="!"?args[2]:args[1];
+
+                while (Exec(cmd) == (args[0]=="!"?"true":"false"))
+                {
+                    r += Exec(code)+Environment.NewLine;
                 }
                 return r;
             } },
@@ -299,7 +315,8 @@ namespace wesh
             } },
 
             {"cd", (args)=>{
-                Variables["currDir"] = GetPath(args[0]);
+                string path = GetPath(args[0]);
+                Variables["currDir"] = path ?? throw new FileNotFoundException();
                 return "";
             } },
 
@@ -566,7 +583,15 @@ namespace wesh
 
             {"reg.write", (args)=>{
                 var key = GetRegistryKey(args[0], true);
-                key.SetValue(args[1], args[2]);
+                if(args.Length > 3)
+                {
+                    string valType = args[3][0].ToString().ToUpper() + args[3].Substring(1, args[3].Length - 1);
+                    key.SetValue(args[1], args[2], (RegistryValueKind)Enum.Parse(typeof(RegistryValueKind), valType));
+                }
+                else
+                {
+                    key.SetValue(args[1], args[2]);
+                }
                 key.Close();
                 return "";
             } },
@@ -950,13 +975,24 @@ namespace wesh
             } },
 
             {"proc.list", (args)=>{
-                var ps = Process.GetProcesses();
-                string s = "";
-                foreach(Process p in ps)
+                var lst = new List<string>();
+
+                if(args.Length > 0)
                 {
-                    s += p.ProcessName + Environment.NewLine;
+                    foreach(var p in Process.GetProcessesByName(args[0]))
+                    {
+                        lst.Add(p.Id.ToString());
+                    }
                 }
-                return s;
+                else
+                {
+                    foreach(var p in Process.GetProcesses())
+                    {
+                        lst.Add(p.Id.ToString());
+                    }
+                }
+
+                return CreateArray(lst.ToArray());
             } },
 
             {"proc.run", (args)=>{
@@ -984,7 +1020,7 @@ namespace wesh
                 if(args.Length > 4) p.StartInfo.Verb = args[4];
                 p.Start();
                 if(args.Length > 2 && args[2] == "true") p.WaitForExit();
-                return (args.Length > 2 && args[2] == "true")?p.StandardOutput.ReadToEnd():"";
+                return (args.Length > 2 && args[2] == "true")?p.StandardOutput.ReadToEnd():p.Id.ToString();
             } },
 
             {"proc.kill", (args)=>{
@@ -997,7 +1033,6 @@ namespace wesh
             } },
 
             {"proc.getInfo", (args)=>{
-                string name = "__WESH_OBJECT_"+GetRandomName();
                 string handleName = "__WESH_WIN32_HANDLE_"+GetRandomName();
 
                 var ps = Process.GetProcessesByName(args[0]);
@@ -1005,32 +1040,35 @@ namespace wesh
 
                 Pointers.Add(handleName, p.MainWindowHandle);
 
-                UserObjects.Add(name, new Dictionary<string, string>
+                return CreateObject(new Dictionary<string, string>
                 {
                     {"name", p.ProcessName},
                     {"id", p.Id.ToString()},
                     {"fileName", p.MainModule.FileName},
                     {"args", p.StartInfo.Arguments},
                     {"mainWindowHandle", handleName}
-                    //TODO: add all process properties
                 });
-                return name;
             } },
 
             {"proc.activate", (args)=>{
-                var ps = Process.GetProcessesByName(args[0]);
-                if(ps.Length > 0)
-                {
-                    ps[0].StartInfo.WindowStyle = ProcessWindowStyle.Normal;
-                    SetForegroundWindow(ps[0].MainWindowHandle);
-                }
+                var ps = Process.GetProcessById(ToInt(args[0]));
+                ShowWindow(ps.MainWindowHandle, 1);
+                SetForegroundWindow(ps.MainWindowHandle);
+                return "";
+            } },
+
+            {"proc.isRunning", (args)=>{
+                return BoolToString(Process.GetProcessById(ToInt(args[0])).HasExited);
+            } },
+
+            {"proc.injectDll", (args)=>{
+                DllInjector.Inject(Process.GetProcessById(ToInt(args[0])), GetPath(args[1]));
                 return "";
             } },
 
             {"kb.sendKey", (args)=>{
                 byte vk = System.Convert.ToByte(Enum.Parse(typeof(Keys), args[0]));
                 keybd_event(vk, 0, 0, 0);
-                //keybd_event(vk, 0x45, 0x1 | 0x2, 0);
                 return "";
             } },
 
