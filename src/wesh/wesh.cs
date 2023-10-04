@@ -16,6 +16,7 @@ using Microsoft.Win32;
 using System.IO.Compression;
 using System.CodeDom.Compiler;
 using Microsoft.CSharp;
+using Microsoft.VisualBasic;
 using DllCallerLib;
 using DllInjectorLib;
 
@@ -80,8 +81,8 @@ namespace wesh
 
         public delegate string Command(string[] args);
 
-        public const double Version = 1.8;
-        public const string VersionStr = "WESH v1.8";
+        public const double Version = 1.9;
+        public const string VersionStr = "WESH v1.9";
         public const string WeshNull = "__WESH_NULL";
         public static readonly string WeshPath = Process.GetCurrentProcess().MainModule.FileName;
         public static readonly string WeshDir = new FileInfo(Process.GetCurrentProcess().MainModule.FileName).Directory.FullName;
@@ -891,7 +892,7 @@ namespace wesh
             {"arr.join", (args)=>{
                 return String.Join(args[1], WeshArrayToArray(args[0]));
             } },
-            
+
             {"module.install", (args)=>{
                 string addr = Variables["modulesUrl"].Replace("MODULE_NAME", args[0]);
                 new WebClient().DownloadFile(addr, Variables["modulesDir"] + "\\" + args[0] + ".weshm");
@@ -1404,7 +1405,13 @@ namespace wesh
                 var funcArgs = new List<Argument>();
 
                 if(args.Length > 3){
-                    foreach(string ar in args.Skip(3)){
+                    foreach(string ar_ in args.Skip(3)){
+                        string ar = ar_;
+
+                        if(ar == WeshNull) ar = "System.IntPtr:0";
+
+                        if(Pointers.ContainsKey(ar)) ar = "System.IntPtr:"+ar;
+
                         string[] spl = ar.Split(':');
 
                         if(spl.Length < 2){
@@ -1446,26 +1453,30 @@ namespace wesh
 
             {"com.create", (args)=>{
                 string name = "__WESH_COM_OBJECT_"+GetRandomName();
-                Type t = Type.GetTypeFromProgID(args[0], true);
-                ComObjects.Add(name, Activator.CreateInstance(t));
+
+                Type t = Type.GetTypeFromProgID(args[0]);
+                object o = Activator.CreateInstance(t);
+
+                ComObjectTypes.Add(name, t);
+                ComObjects.Add(name, o);
                 return name;
             } },
 
             {"com.getProp", (args)=>{
-                return GetProp(ComObjects[args[0]], args[1]).ToString();
+                return GetProp(ComObjectTypes[args[0]], ComObjects[args[0]], args[1]).ToString();
             } },
 
             {"com.setProp", (args)=>{
                 if(int.TryParse(args[2], out int val))
                 {
-                    SetProp(ComObjects[args[0]], args[1], val);
+                    SetProp(ComObjectTypes[args[0]], ComObjects[args[0]], args[1], val);
                 }else if(args[2] == "true" || args[2] == "false")
                 {
-                    SetProp(ComObjects[args[0]], args[1], StringToBool(args[2]));
+                    SetProp(ComObjectTypes[args[0]], ComObjects[args[0]], args[1], StringToBool(args[2]));
                 }
                 else
                 {
-                    SetProp(ComObjects[args[0]], args[1], args[2]);
+                    SetProp(ComObjectTypes[args[0]], ComObjects[args[0]], args[1], args[2]);
                 }
 
                 return "";
@@ -1482,12 +1493,67 @@ namespace wesh
                     else ar.Add(p);
                 }
 
-                return InvokeMethod(ComObjects[args[0]], args[1], ar.ToArray()).ToString();
+                var m = InvokeMethod(ComObjectTypes[args[0]], ComObjects[args[0]], args[1], ar.ToArray());
+
+                if(m == null) return "";
+                return m.ToString();
             } },
 
-            {"getargs", (args)=>{
-                Console.WriteLine(String.Join(", ", args));
+            {"net.create", (args)=>{
+                string name = "__WESH_NET_OBJECT_"+GetRandomName();
+
+                var pa = args.Skip(1);
+                List<object> ar = new List<object>();
+                foreach(string p in pa)
+                {
+                    if(int.TryParse(p, out int v)) ar.Add(v);
+                    else if(p == "true" || p == "false") ar.Add(StringToBool(p));
+                    else ar.Add(p);
+                }
+
+                Type t = Type.GetType(args[0]);
+                object o = Activator.CreateInstance(t, ar.ToArray());
+
+                NetObjectTypes.Add(name, t);
+                NetObjects.Add(name, o);
+                return name;
+            } },
+
+            {"net.getProp", (args)=>{
+                return GetProp(NetObjectTypes[args[0]], NetObjects[args[0]], args[1]).ToString();
+            } },
+
+            {"net.setProp", (args)=>{
+                if(int.TryParse(args[2], out int val))
+                {
+                    SetProp(NetObjectTypes[args[0]], NetObjects[args[0]], args[1], val);
+                }else if(args[2] == "true" || args[2] == "false")
+                {
+                    SetProp(NetObjectTypes[args[0]], NetObjects[args[0]], args[1], StringToBool(args[2]));
+                }
+                else
+                {
+                    SetProp(NetObjectTypes[args[0]], NetObjects[args[0]], args[1], args[2]);
+                }
+
                 return "";
+            } },
+
+            {"net.invokeMethod", (args)=>{
+                var pa = args.Skip(2);
+                List<object> ar = new List<object>();
+
+                foreach(string p in pa)
+                {
+                    if(int.TryParse(p, out int v)) ar.Add(v);
+                    else if(p == "true" || p == "false") ar.Add(StringToBool(p));
+                    else ar.Add(p);
+                }
+
+                var m = InvokeMethod(NetObjectTypes[args[0]], NetObjects[args[0]], args[1], ar.ToArray());
+
+                if(m == null) return "";
+                return m.ToString();
             } },
 
             {"zip.create", (args)=>{
@@ -1629,6 +1695,10 @@ namespace wesh
                 return "";
             } },
 
+            {"ptr.getValue", (args)=>{
+                return Pointers[args[0]].ToString();
+            } },
+
             {"audio.open", (args)=>{
                 string name = "__WESH_PLAYER_"+GetRandomName();
 
@@ -1718,7 +1788,10 @@ namespace wesh
         public static Dictionary<string, Control> Controls = new Dictionary<string, Control>();
         public static Dictionary<string, string> Functions = new Dictionary<string, string>();
         public static Dictionary<string, IntPtr> Pointers = new Dictionary<string, IntPtr>();
+        public static Dictionary<string, Type> ComObjectTypes = new Dictionary<string, Type>();
         public static Dictionary<string, object> ComObjects = new Dictionary<string, object>();
+        public static Dictionary<string, Type> NetObjectTypes = new Dictionary<string, Type>();
+        public static Dictionary<string, object> NetObjects = new Dictionary<string, object>();
         public static Dictionary<string, Dictionary<string, string>> Classes = new Dictionary<string, Dictionary<string, string>>();
 
         private static string ShortTypeNameToFull(string sn)
@@ -1778,19 +1851,19 @@ namespace wesh
             return dialogResult;
         }
 
-        private static object GetProp(object obj, string name)
+        private static object GetProp(Type t, object o, string name)
         {
-            return obj.GetType().GetProperty(name).GetValue(obj, null);
+            return t.InvokeMember(name, System.Reflection.BindingFlags.GetProperty, null, o, new object[] { });
         }
 
-        private static void SetProp(object obj, string name, object value)
+        private static void SetProp(Type t, object o, string name, object value)
         {
-            obj.GetType().GetProperty(name).SetValue(obj, value);
+            t.InvokeMember(name, System.Reflection.BindingFlags.SetProperty, null, o, new object[] { value });
         }
 
-        private static object InvokeMethod(object obj, string name, object[] args)
+        private static object InvokeMethod(Type t, object o, string name, object[] args)
         {
-            return obj.GetType().GetMethod(name).Invoke(obj, args);
+            return t.InvokeMember(name, System.Reflection.BindingFlags.InvokeMethod, null, o, args);
         }
 
         private static string WeshNullToNull(string s)
