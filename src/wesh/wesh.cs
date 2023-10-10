@@ -16,7 +16,6 @@ using Microsoft.Win32;
 using System.IO.Compression;
 using System.CodeDom.Compiler;
 using Microsoft.CSharp;
-using Microsoft.VisualBasic;
 using DllCallerLib;
 using DllInjectorLib;
 
@@ -81,8 +80,8 @@ namespace wesh
 
         public delegate string Command(string[] args);
 
-        public const double Version = 1.9;
-        public const string VersionStr = "WESH v1.9";
+        public const double Version = 2.0;
+        public const string VersionStr = "WESH v2.0";
         public const string WeshNull = "__WESH_NULL";
         public static readonly string WeshPath = Process.GetCurrentProcess().MainModule.FileName;
         public static readonly string WeshDir = new FileInfo(Process.GetCurrentProcess().MainModule.FileName).Directory.FullName;
@@ -154,7 +153,7 @@ namespace wesh
             } },
 
             {"var.set", (args)=>{
-                SetVariable(args[0], args[1]);
+                Variables[args[0]] = args[1];
                 return "";
             } },
 
@@ -1451,56 +1450,20 @@ namespace wesh
                 return "";
             } },
 
-            {"com.create", (args)=>{
-                string name = "__WESH_COM_OBJECT_"+GetRandomName();
+            {"eobj.createCOMObject", (args)=>{
+                string name = "__WESH_EXT_OBJECT_"+GetRandomName();
 
                 Type t = Type.GetTypeFromProgID(args[0]);
                 object o = Activator.CreateInstance(t);
 
-                ComObjectTypes.Add(name, t);
-                ComObjects.Add(name, o);
+                ExtObjectTypes.Add(name, t);
+                ExtObjects.Add(name, o);
                 return name;
             } },
 
-            {"com.getProp", (args)=>{
-                return GetProp(ComObjectTypes[args[0]], ComObjects[args[0]], args[1]).ToString();
-            } },
 
-            {"com.setProp", (args)=>{
-                if(int.TryParse(args[2], out int val))
-                {
-                    SetProp(ComObjectTypes[args[0]], ComObjects[args[0]], args[1], val);
-                }else if(args[2] == "true" || args[2] == "false")
-                {
-                    SetProp(ComObjectTypes[args[0]], ComObjects[args[0]], args[1], StringToBool(args[2]));
-                }
-                else
-                {
-                    SetProp(ComObjectTypes[args[0]], ComObjects[args[0]], args[1], args[2]);
-                }
-
-                return "";
-            } },
-
-            {"com.invokeMethod", (args)=>{
-                var pa = args.Skip(2);
-                List<object> ar = new List<object>();
-
-                foreach(string p in pa)
-                {
-                    if(int.TryParse(p, out int v)) ar.Add(v);
-                    else if(p == "true" || p == "false") ar.Add(StringToBool(p));
-                    else ar.Add(p);
-                }
-
-                var m = InvokeMethod(ComObjectTypes[args[0]], ComObjects[args[0]], args[1], ar.ToArray());
-
-                if(m == null) return "";
-                return m.ToString();
-            } },
-
-            {"net.create", (args)=>{
-                string name = "__WESH_NET_OBJECT_"+GetRandomName();
+            {"eobj.createNETObject", (args)=>{
+                string name = "__WESH_EXT_OBJECT_"+GetRandomName();
 
                 var pa = args.Skip(1);
                 List<object> ar = new List<object>();
@@ -1514,32 +1477,32 @@ namespace wesh
                 Type t = Type.GetType(args[0]);
                 object o = Activator.CreateInstance(t, ar.ToArray());
 
-                NetObjectTypes.Add(name, t);
-                NetObjects.Add(name, o);
+                ExtObjectTypes.Add(name, t);
+                ExtObjects.Add(name, o);
                 return name;
             } },
 
-            {"net.getProp", (args)=>{
-                return GetProp(NetObjectTypes[args[0]], NetObjects[args[0]], args[1]).ToString();
+            {"eobj.getProp", (args)=>{
+                return GetProp(ExtObjectTypes[args[0]], ExtObjects[args[0]], args[1]).ToString();
             } },
 
-            {"net.setProp", (args)=>{
+            {"eobj.setProp", (args)=>{
                 if(int.TryParse(args[2], out int val))
                 {
-                    SetProp(NetObjectTypes[args[0]], NetObjects[args[0]], args[1], val);
+                    SetProp(ExtObjectTypes[args[0]], ExtObjects[args[0]], args[1], val);
                 }else if(args[2] == "true" || args[2] == "false")
                 {
-                    SetProp(NetObjectTypes[args[0]], NetObjects[args[0]], args[1], StringToBool(args[2]));
+                    SetProp(ExtObjectTypes[args[0]], ExtObjects[args[0]], args[1], StringToBool(args[2]));
                 }
                 else
                 {
-                    SetProp(NetObjectTypes[args[0]], NetObjects[args[0]], args[1], args[2]);
+                    SetProp(ExtObjectTypes[args[0]], ExtObjects[args[0]], args[1], args[2]);
                 }
 
                 return "";
             } },
 
-            {"net.invokeMethod", (args)=>{
+            {"eobj.invokeMethod", (args)=>{
                 var pa = args.Skip(2);
                 List<object> ar = new List<object>();
 
@@ -1547,13 +1510,26 @@ namespace wesh
                 {
                     if(int.TryParse(p, out int v)) ar.Add(v);
                     else if(p == "true" || p == "false") ar.Add(StringToBool(p));
+                    else if(ExtObjects.ContainsKey(p)) ar.Add(ExtObjects[p]);
                     else ar.Add(p);
                 }
 
-                var m = InvokeMethod(NetObjectTypes[args[0]], NetObjects[args[0]], args[1], ar.ToArray());
+                var m = InvokeMethod(ExtObjectTypes[args[0]], ExtObjects[args[0]], args[1], ar.ToArray());
 
-                if(m == null) return "";
-                return m.ToString();
+                if(m == null) return WeshNull;
+
+                var mType = m.GetType();
+                if(mType.FullName == "System.String") return m.ToString();
+                else if(mType.FullName.StartsWith("System.Int")) return m.ToString();
+                else if(mType.FullName == "System.Boolean") return BoolToString((bool)m);
+                else
+                {
+                    string name = "__WESH_EXT_OBJECT_"+GetRandomName();
+
+                    ExtObjectTypes.Add(name, mType);
+                    ExtObjects.Add(name, m);
+                    return name;
+                }
             } },
 
             {"zip.create", (args)=>{
@@ -1788,10 +1764,8 @@ namespace wesh
         public static Dictionary<string, Control> Controls = new Dictionary<string, Control>();
         public static Dictionary<string, string> Functions = new Dictionary<string, string>();
         public static Dictionary<string, IntPtr> Pointers = new Dictionary<string, IntPtr>();
-        public static Dictionary<string, Type> ComObjectTypes = new Dictionary<string, Type>();
-        public static Dictionary<string, object> ComObjects = new Dictionary<string, object>();
-        public static Dictionary<string, Type> NetObjectTypes = new Dictionary<string, Type>();
-        public static Dictionary<string, object> NetObjects = new Dictionary<string, object>();
+        public static Dictionary<string, Type> ExtObjectTypes = new Dictionary<string, Type>();
+        public static Dictionary<string, object> ExtObjects = new Dictionary<string, object>();
         public static Dictionary<string, Dictionary<string, string>> Classes = new Dictionary<string, Dictionary<string, string>>();
 
         private static string ShortTypeNameToFull(string sn)
