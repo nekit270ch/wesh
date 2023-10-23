@@ -16,8 +16,8 @@ using Microsoft.Win32;
 using System.IO.Compression;
 using System.CodeDom.Compiler;
 using Microsoft.CSharp;
+using System.Threading.Tasks;
 using DllCallerLib;
-using DllInjectorLib;
 
 namespace wesh
 {
@@ -80,8 +80,8 @@ namespace wesh
 
         public delegate string Command(string[] args);
 
-        public const double Version = 2.0;
-        public const string VersionStr = "WESH v2.0";
+        public const double Version = 2.1;
+        public const string VersionStr = "WESH v2.1";
         public const string WeshNull = "__WESH_NULL";
         public static readonly string WeshPath = Process.GetCurrentProcess().MainModule.FileName;
         public static readonly string WeshDir = new FileInfo(Process.GetCurrentProcess().MainModule.FileName).Directory.FullName;
@@ -158,7 +158,7 @@ namespace wesh
             } },
 
             {"var.delete", (args)=>{
-                Variables.Remove(args[0]);
+                foreach(string var in args) Variables.Remove(var);
                 return "";
             } },
 
@@ -184,6 +184,25 @@ namespace wesh
                         code = File.ReadAllText(name);
                     }
                     ExecScript(code);
+                }
+                return "";
+            } },
+
+            {"async", (args)=>{
+                Task.Run(()=>{
+                    Exec(args[0]);
+                });
+                return "";
+            } },
+
+            {"try", (args)=>{
+                try
+                {
+                    Exec(args[0], false, false);
+                }catch(Exception ex)
+                {
+                    SetVariable("err", ex.Message);
+                    Exec(args[1]);
                 }
                 return "";
             } },
@@ -1091,11 +1110,6 @@ namespace wesh
                 return BoolToString(Process.GetProcessById(ToInt(args[0])).HasExited);
             } },
 
-            {"proc.injectDll", (args)=>{
-                DllInjector.Inject(Process.GetProcessById(ToInt(args[0])), GetPath(args[1]));
-                return "";
-            } },
-
             {"kb.sendKey", (args)=>{
                 byte vk = System.Convert.ToByte(Enum.Parse(typeof(Keys), args[0]));
                 keybd_event(vk, 0, 0, 0);
@@ -1435,7 +1449,9 @@ namespace wesh
                 }
 
                 try{
-                    return DllCaller.CallFunction(args[0], args[1], ShortTypeNameToFull(args[2]), funcArgs).ToString();
+                    var r = DllCaller.CallFunction(args[0], args[1], ShortTypeNameToFull(args[2]), funcArgs);
+                    if(r == null) return WeshNull;
+                    return r.ToString();
                 }catch(ArgumentNullException){
                     throw new Exception("Invalid DLL or function name");
                 }
@@ -1479,6 +1495,16 @@ namespace wesh
 
                 ExtObjectTypes.Add(name, t);
                 ExtObjects.Add(name, o);
+                return name;
+            } },
+
+            {"eobj.getNETClass", (args)=>{
+                string name = "__WESH_EXT_OBJECT_"+GetRandomName();
+
+                Type t = Type.GetType(args[0]);
+
+                ExtObjectTypes.Add(name, t);
+                ExtObjects.Add(name, null);
                 return name;
             } },
 
@@ -2315,15 +2341,15 @@ wesh [-v] [-h] [-c <команда>] [-f <файл>]
         public static string ExecFunction(string name, string[] args)
         {
             SetVariable("funcArgs", CreateArray(args));
-            return Exec(Functions[name], true);
+            return Exec(Functions[name], true, true);
         }
 
         public static string Exec(string cmd)
         {
-            return Exec(cmd, false);
+            return Exec(cmd, false, true);
         }
 
-        public static string Exec(string cmd, bool isFunc)
+        public static string Exec(string cmd, bool isFunc, bool catchErrors)
         {
             string ret = "";
             try
@@ -2405,6 +2431,9 @@ wesh [-v] [-h] [-c <команда>] [-f <файл>]
                     }
 
                     string msg = $"ERROR: \"{cmd}\" command not found";
+
+                    if (!catchErrors) throw new Exception(msg);
+
                     SetVariable("error", msg);
 
                     string errAct = GetVariable("errorAction");
@@ -2424,6 +2453,8 @@ wesh [-v] [-h] [-c <команда>] [-f <файл>]
             }
             catch (Exception ex)
             {
+                if (!catchErrors) throw ex;
+
                 ret = "ERROR: " + ex.Message;
                 SetVariable("error", ret);
 

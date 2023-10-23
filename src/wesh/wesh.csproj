@@ -119,7 +119,6 @@
     <Reference Include="System.Xml" />
   </ItemGroup>
   <ItemGroup>
-    <Compile Include="injector.cs" />
     <Compile Include="dllcaller.cs" />
     <Compile Include="wesh.cs" />
     <Compile Include="hotkey.cs" />

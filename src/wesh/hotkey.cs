@@ -27,17 +27,20 @@ namespace wesh
         private const int WH_KEYBOARD_LL = 13;
         private const int WM_KEYDOWN = 0x0100;
         private const int WM_KEYUP = 0x0101;
-        private static IntPtr _hookID = IntPtr.Zero;
+        private readonly static IntPtr hookID = IntPtr.Zero;
 
         public static IntPtr SetKeyHandler(bool stop, KeyHandlerCallback callback)
         {
             return SetHook((nCode, wParam, lParam)=>{
                 int vkCode = Marshal.ReadInt32(lParam);
-                string key = ((Keys)vkCode).ToString();
+                Keys? kKey = (Keys)vkCode;
+                if(kKey != null)
+                {
+                    string key = kKey.ToString();
+                    if (nCode >= 0 && wParam == (IntPtr)WM_KEYDOWN) callback(key);
+                }
 
-                if(nCode >= 0 && wParam == (IntPtr)WM_KEYDOWN) callback(key);
-
-                return stop?_hookID:CallNextHookEx(_hookID, nCode, wParam, lParam);
+                return stop?hookID:CallNextHookEx(hookID, nCode, wParam, lParam);
             });
         }
 
@@ -47,29 +50,34 @@ namespace wesh
 
             return SetHook((nCode, wParam, lParam)=>{
                 int vkCode = Marshal.ReadInt32(lParam);
-                string key = ((Keys)vkCode).ToString();
+                Keys? kKey = ((Keys)vkCode);
 
-                if (nCode >= 0 && wParam == (IntPtr)WM_KEYDOWN)
+                if(kKey != null)
                 {
-                    if (key.Contains("ControlKey")) ctrlPressed = true;
-                    if (key.Contains("Menu")) altPressed = true;
-                    if (key.Contains("ShiftKey")) shiftPressed = true;
-                    else if ((ctrl?ctrlPressed:true) && (alt?altPressed:true) && (shift?shiftPressed:true) && key == skey) callback();
-                }
-                else if(nCode >= 0 && wParam == (IntPtr)WM_KEYUP)
-                {
-                    if (key.Contains("ControlKey")) ctrlPressed = false;
-                    if (key.Contains("Menu")) altPressed = false;
-                    if (key.Contains("ShiftKey")) shiftPressed = false;
+                    string key = kKey.ToString();
+
+                    if (nCode >= 0 && wParam == (IntPtr)WM_KEYDOWN)
+                    {
+                        if (key.Contains("ControlKey")) ctrlPressed = true;
+                        if (key.Contains("Menu")) altPressed = true;
+                        if (key.Contains("ShiftKey")) shiftPressed = true;
+                        else if ((ctrl ? ctrlPressed : true) && (alt ? altPressed : true) && (shift ? shiftPressed : true) && key == skey) callback();
+                    }
+                    else if (nCode >= 0 && wParam == (IntPtr)WM_KEYUP)
+                    {
+                        if (key.Contains("ControlKey")) ctrlPressed = false;
+                        if (key.Contains("Menu")) altPressed = false;
+                        if (key.Contains("ShiftKey")) shiftPressed = false;
+                    }
                 }
 
-                return stop?_hookID:CallNextHookEx(_hookID, nCode, wParam, lParam);
+                return stop?hookID:CallNextHookEx(hookID, nCode, wParam, lParam);
             });
         }
 
-        public static void UnsetHotKey(IntPtr id)
+        public static void UnsetHotKey()
         {
-            UnhookWindowsHookEx(_hookID);
+            UnhookWindowsHookEx(hookID);
         }
 
         private static IntPtr SetHook(LowLevelKeyboardProc proc)

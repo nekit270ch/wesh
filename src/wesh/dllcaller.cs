@@ -3,6 +3,7 @@ using System.Reflection;
 using System.Reflection.Emit;
 using System.Collections.Generic;
 using System.Runtime.InteropServices;
+using System.Runtime.ExceptionServices;
 
 namespace DllCallerLib{
     public class Argument{
@@ -104,6 +105,7 @@ namespace DllCallerLib{
             return CallFunction(dllName, funcName, type, args.ToArray());
         }
 
+        [HandleProcessCorruptedStateExceptions]
         public static object CallFunction(string dllName, string funcName, string type, Argument[] args){
             IntPtr mod = LoadLibrary(dllName);
             IntPtr fn = IntPtr.Zero;
@@ -124,7 +126,14 @@ namespace DllCallerLib{
 
             Type del = CreateDelegate(type, argTypes.ToArray());
 
-            return Marshal.GetDelegateForFunctionPointer(fn, del).DynamicInvoke(argValues.ToArray());
+            try
+            {
+                return Marshal.GetDelegateForFunctionPointer(fn, del).DynamicInvoke(argValues.ToArray());
+            }
+            catch (Exception e)
+            {
+                throw new Exception(e.Message);
+            }
         }
     }
 }
