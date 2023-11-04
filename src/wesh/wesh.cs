@@ -80,8 +80,8 @@ namespace wesh
 
         public delegate string Command(string[] args);
 
-        public const double Version = 2.1;
-        public const string VersionStr = "WESH v2.1";
+        public const double Version = 2.2;
+        public const string VersionStr = "WESH v2.2";
         public const string WeshNull = "__WESH_NULL";
         public static readonly string WeshPath = Process.GetCurrentProcess().MainModule.FileName;
         public static readonly string WeshDir = new FileInfo(Process.GetCurrentProcess().MainModule.FileName).Directory.FullName;
@@ -531,6 +531,10 @@ namespace wesh
 
             {"str.fromBase64", (args)=>{
                 return FromBase64(args[1]);
+            } },
+
+            {"str.length", (args)=>{
+                return args[0].Length.ToString();
             } },
 
             {"fs.readFile", (args)=>{
@@ -1449,12 +1453,70 @@ namespace wesh
                 }
 
                 try{
-                    var r = DllCaller.CallFunction(args[0], args[1], ShortTypeNameToFull(args[2]), funcArgs);
+                    string type = ShortTypeNameToFull(args[2]);
+                    var r = DllCaller.CallFunction(args[0], args[1], type, funcArgs);
                     if(r == null) return WeshNull;
+                    if(type == "System.IntPtr")
+                    {
+                        string name = "__WESH_POINTER_"+GetRandomName();
+                        Pointers.Add(name, (IntPtr)r);
+                        return name;
+                    }
                     return r.ToString();
                 }catch(ArgumentNullException){
                     throw new Exception("Invalid DLL or function name");
                 }
+            } },
+
+            {"win32.dllImport", (args)=>{
+                string eFuncName = args[0];
+                string dllName = args[1];
+                string funcName = args[2];
+                string type = ShortTypeNameToFull(args[3]);
+                string[] argTypes = args.Skip(4).Select(t=>ShortTypeNameToFull(t)).ToArray();
+
+                Commands.Add(eFuncName==WeshNull?dllName+"/"+funcName:eFuncName, (ca)=>{
+                    List<Argument> argList = new List<Argument>();
+
+                    for(int i = 0; i < argTypes.Length; i++)
+                    {
+                        string argType = argTypes[i];
+                        if(argType == "System.IntPtr" && ca[i] == WeshNull) ca[i] = "0";
+                        bool isWeshPointer = (argType=="System.IntPtr"&&Pointers.ContainsKey(ca[i]));
+
+                        try{
+                            argList.Add(
+                                new Argument(
+                                    argType,
+                                    argType=="System.IntPtr"?(isWeshPointer?Pointers[ca[i]]:new IntPtr(int.Parse(ca[i]))):System.Convert.ChangeType(ca[i], Type.GetType(argType))
+                                )
+                            );
+                        }catch(FormatException){
+                            throw new Exception("Invalid format");
+                        }
+                    }
+
+                    object r = null;
+                    try{
+                        object _r = DllCaller.CallFunction(dllName, funcName, type=="void"?"System.Int32":type, argList);
+                        if(type != "void") r = _r;
+                        if(type == "System.IntPtr")
+                        {
+                            string name = "__WESH_POINTER_"+GetRandomName();
+                            Pointers.Add(name, (IntPtr)_r);
+                            return name;
+                        }
+                    }catch(ArgumentNullException){
+                        r = "Invalid DLL or function name";
+                    }catch(Exception e){
+                        r = e.Message;
+                    }
+
+                    if(r == null) return WeshNull;
+                    return r.ToString();
+                });
+
+                return "";
             } },
 
             {"clipboard.get", (args)=>{
@@ -1617,6 +1679,11 @@ namespace wesh
                 return name;
             } },
 
+            {"ptr.free", (args)=>{
+                Marshal.FreeHGlobal(Pointers[args[0]]);
+                return "";
+            } },
+
             {"ptr.read", (args)=>{
                 string type = ShortTypeNameToFull(args[1]);
                 IntPtr ptr = Pointers[args[0]];
@@ -1699,6 +1766,30 @@ namespace wesh
 
             {"ptr.getValue", (args)=>{
                 return Pointers[args[0]].ToString();
+            } },
+
+            {"ptr.sizeof", (args)=>{
+                return Marshal.SizeOf(Type.GetType(ShortTypeNameToFull(args[0]))).ToString();
+            } },
+
+            {"ptr.getAnsiString", (args)=>{
+                return Marshal.PtrToStringAnsi(Pointers[args[0]]);
+            } },
+
+            {"ptr.putAnsiString", (args)=>{
+                string name = "__WESH_POINTER_"+GetRandomName();
+                Pointers.Add(name, Marshal.StringToHGlobalAnsi(args[0]));
+                return name;
+            } },
+
+            {"ptr.getUnicodeString", (args)=>{
+                return Marshal.PtrToStringUni(Pointers[args[0]]);
+            } },
+
+            {"ptr.putUnicodeString", (args)=>{
+                string name = "__WESH_POINTER_"+GetRandomName();
+                Pointers.Add(name, Marshal.StringToHGlobalUni(args[0]));
+                return name;
             } },
 
             {"audio.open", (args)=>{
