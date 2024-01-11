@@ -18,6 +18,7 @@ using System.CodeDom.Compiler;
 using Microsoft.CSharp;
 using System.Threading.Tasks;
 using DllCallerLib;
+using System.Reflection;
 
 namespace wesh
 {
@@ -34,6 +35,9 @@ namespace wesh
 
         [DllImport("user32.dll", CharSet = CharSet.Auto, CallingConvention = CallingConvention.StdCall)]
         private static extern int SendMessage(IntPtr hWnd, int wMsg, long lParam, StringBuilder wParam);
+
+        [DllImport("user32.dll", CharSet = CharSet.Auto, CallingConvention = CallingConvention.StdCall)]
+        private static extern int SendMessage(IntPtr hWnd, uint wMsg, long lParam, long wParam);
 
         [DllImport("user32.dll", CharSet = CharSet.Auto, CallingConvention = CallingConvention.StdCall)]
         private static extern int SendMessage(IntPtr hWnd, int wMsg, long lParam, long wParam);
@@ -68,6 +72,9 @@ namespace wesh
         [DllImport("winmm.dll", CharSet = CharSet.Auto, CallingConvention = CallingConvention.StdCall)]
         public static extern uint mciSendString(string lpstrCommand, StringBuilder lpstrReturnString, int uReturnLength, IntPtr hWndCallback);
 
+        [DllImport("user32.dll", CharSet = CharSet.Auto, CallingConvention = CallingConvention.StdCall)]
+        private static extern uint MapVirtualKey(uint uCode, uint uMapType);
+
         private struct W32Rect
         {
             public int Left { get; set; }
@@ -78,14 +85,27 @@ namespace wesh
 
         delegate bool W32EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
 
+        private const uint WM_LBUTTONDOWN = 0x0201;
+        private const uint WM_LBUTTONUP = 0x0202;
+        private const uint WM_RBUTTONDOWN = 0x0204;
+        private const uint WM_RBUTTONUP = 0x0205;
+        private const uint WM_MBUTTONDOWN = 0x0207;
+        private const uint WM_MBUTTONUP = 0x0208;
+        private const uint WM_LBUTTONDBLCLK = 0x0203;
+        private const uint WM_KEYDOWN = 0x0100;
+        private const uint WM_KEYUP = 0x0101;
+        private const uint WM_MOUSEMOVE = 0x0200;
+        private const uint BM_CLICK = 0xf5;
+
         public delegate string Command(string[] args);
 
-        public const double Version = 2.2;
-        public const string VersionStr = "WESH v2.2";
+        public const double Version = 2.3;
+        public const string VersionStr = "WESH v2.3";
         public const string WeshNull = "__WESH_NULL";
         public static readonly string WeshPath = Process.GetCurrentProcess().MainModule.FileName;
         public static readonly string WeshDir = new FileInfo(Process.GetCurrentProcess().MainModule.FileName).Directory.FullName;
         private static readonly Random rand = new Random((int)DateTime.Now.Ticks);
+        private static bool IsDefaultAssembliesLoaded = false;
 
         public static Dictionary<string, Command> Commands = new Dictionary<string, Command>()
         {
@@ -452,6 +472,10 @@ namespace wesh
 
                 if(ret == null) return "";
                 return ret.ToString();
+            } },
+
+            {"isNull", (args)=>{
+                return BoolToString(args[0] == WeshNull);
             } },
 
             {"cmd.list", (args)=>{
@@ -877,23 +901,10 @@ namespace wesh
             } },
 
             {"arr.insert", (args)=>{
-                var arr = UserObjects[args[0]];
-                var len = ToInt(arr["length"]);
-
-                var newArr = new Dictionary<string, string>();
-
-                for(int i = 0; i < len + 1; i++)
-                {
-                    if(i < ToInt(args[1])) newArr[i.ToString()] = arr[i.ToString()];
-                    else if(i == ToInt(args[1])) newArr[i.ToString()] = args[2];
-                    else newArr[i.ToString()] = arr[(i - 1).ToString()];
-                }
-
-
-                newArr.Add("length", (len+1).ToString());
-
-                arr.Clear();
-                foreach(var kvp in newArr) arr.Add(kvp.Key, kvp.Value);
+                string[] array = WeshArrayToArray(args[0]);
+                var list = array.ToList();
+                list.Insert(ToInt(args[1]), args[2]);
+                ArrayToWeshArray(args[0], list.ToArray());
 
                 return args[2];
             } },
@@ -1340,13 +1351,17 @@ namespace wesh
 
             {"win32.findWindow", (args)=>{
                 string name = "__WESH_WIN32_HANDLE_"+GetRandomName();
-                Pointers.Add(name, FindWindow(WeshNullToNull(args[0]), WeshNullToNull(args[1])));
+                IntPtr win = FindWindow(WeshNullToNull(args[0]), WeshNullToNull(args[1]));
+                if(win == IntPtr.Zero) return WeshNull;
+                Pointers.Add(name, win);
                 return name;
             } },
 
             {"win32.findChildWindow", (args)=>{
                 string name = "__WESH_WIN32_HANDLE_"+GetRandomName();
-                Pointers.Add(name, FindWindowEx(Pointers[args[0]], (IntPtr)0, WeshNullToNull(args[1]), WeshNullToNull(args[2])));
+                IntPtr win = FindWindowEx(Pointers[args[0]], (IntPtr)0, WeshNullToNull(args[1]), WeshNullToNull(args[2]));
+                if(win == IntPtr.Zero) return WeshNull;
+                Pointers.Add(name, win);
                 return name;
             } },
 
@@ -1539,6 +1554,10 @@ namespace wesh
                 return name;
             } },
 
+            {"eobj.loadNETAssembly", (args)=>{
+                LoadedAssemblies.Add(Assembly.LoadWithPartialName(args[0]));
+                return "";
+            } },
 
             {"eobj.createNETObject", (args)=>{
                 string name = "__WESH_EXT_OBJECT_"+GetRandomName();
@@ -1552,7 +1571,18 @@ namespace wesh
                     else ar.Add(p);
                 }
 
-                Type t = Type.GetType(args[0]);
+                if(!IsDefaultAssembliesLoaded){
+                    LoadedAssemblies.AddRange(AppDomain.CurrentDomain.GetAssemblies());
+                    IsDefaultAssembliesLoaded = true;
+                }
+
+                Type t = null;
+
+                foreach(Assembly asm in LoadedAssemblies){
+                    t = asm.GetType(args[0]);
+                    if(t != null) break;
+                }
+
                 object o = Activator.CreateInstance(t, ar.ToArray());
 
                 ExtObjectTypes.Add(name, t);
@@ -1563,7 +1593,17 @@ namespace wesh
             {"eobj.getNETClass", (args)=>{
                 string name = "__WESH_EXT_OBJECT_"+GetRandomName();
 
-                Type t = Type.GetType(args[0]);
+                if(!IsDefaultAssembliesLoaded){
+                    LoadedAssemblies.AddRange(AppDomain.CurrentDomain.GetAssemblies());
+                    IsDefaultAssembliesLoaded = true;
+                }
+
+                Type t = null;
+
+                foreach(Assembly asm in LoadedAssemblies){
+                    t = asm.GetType(args[0]);
+                    if(t != null) break;
+                }
 
                 ExtObjectTypes.Add(name, t);
                 ExtObjects.Add(name, null);
@@ -1833,7 +1873,27 @@ namespace wesh
             {"audio.sendMCI", (args)=>{
                 mciSendString(args[0], null, 0, IntPtr.Zero);
                 return "";
-            } }
+            } },
+
+            {"input.sendClick", (args)=>{
+                Click(Pointers[args[0]], args[1], ToInt(args[2]), ToInt(args[3]), args.Length>4?ToInt(args[4]):0);
+                return "";
+            } },
+
+            {"input.sendMouseMove", (args)=>{
+                MouseMove(Pointers[args[0]], ToInt(args[1]), ToInt(args[2]));
+                return "";
+            } },
+
+            {"input.sendKeyPress", (args)=>{
+                PressKey(Pointers[args[0]], (int)Enum.Parse(typeof(Keys), args[1]), args.Length>2?ToInt(args[2]):0);
+                return "";
+            } },
+
+            {"input.sendDoubleClick", (args)=>{
+                DoubleClick(Pointers[args[0]], ToInt(args[1]), ToInt(args[2]));
+                return "";
+            } },
         };
 
         public static Dictionary<string, string> Lang = new Dictionary<string, string>()
@@ -1884,7 +1944,7 @@ namespace wesh
         public static Dictionary<string, Type> ExtObjectTypes = new Dictionary<string, Type>();
         public static Dictionary<string, object> ExtObjects = new Dictionary<string, object>();
         public static Dictionary<string, Dictionary<string, string>> Classes = new Dictionary<string, Dictionary<string, string>>();
-
+        public static List<Assembly> LoadedAssemblies = new List<Assembly>();
         private static string ShortTypeNameToFull(string sn)
         {
             string name = sn;
@@ -1898,6 +1958,50 @@ namespace wesh
             else if (name == "char") name = "System.Char";
             else if (name == "string") name = "System.String";
             return name;
+        }
+
+        private static void Click(IntPtr hWnd, string btn, int x, int y, int time = 0)
+        {
+            long lParam = GetMouseLParam(x, y);
+            SendMessage(hWnd, btn == "left" ? WM_LBUTTONDOWN : (btn == "right" ? WM_RBUTTONDOWN : WM_MBUTTONDOWN), 0, lParam);
+            if (time > 0) Thread.Sleep(time);
+            SendMessage(hWnd, btn == "left" ? WM_LBUTTONUP : (btn == "right" ? WM_RBUTTONUP : WM_MBUTTONUP), 0, lParam);
+        }
+
+        private static void DoubleClick(IntPtr hWnd, int x, int y)
+        {
+            long lParam = GetMouseLParam(x, y);
+            SendMessage(hWnd, WM_LBUTTONDOWN, 0, lParam);
+            SendMessage(hWnd, WM_LBUTTONDBLCLK, 0, lParam);
+            SendMessage(hWnd, WM_LBUTTONUP, 0, lParam);
+        }
+
+        private static void MouseMove(IntPtr hWnd, int x, int y)
+        {
+            long lParam = GetMouseLParam(0, 0);
+            SendMessage(hWnd, WM_MOUSEMOVE, 0, lParam);
+        }
+
+        private static void PressKey(IntPtr hWnd, int keyCode, int time = 0)
+        {
+            SendMessage(hWnd, WM_KEYDOWN, (long)keyCode, GetKeyDownLParam(keyCode));
+            if (time > 0) Thread.Sleep(time);
+            SendMessage(hWnd, WM_KEYUP, (long)keyCode, GetKeyUpLParam(keyCode));
+        }
+
+        private static long GetMouseLParam(int x, int y)
+        {
+            return x | (y << 16);
+        }
+
+        private static long GetKeyDownLParam(int key)
+        {
+            return (MapVirtualKey((uint)key, 0) << 16) | 0;
+        }
+
+        private static long GetKeyUpLParam(int key)
+        {
+            return (0x00000001 | (MapVirtualKey((uint)key, 0) << 16) | (0 << 29) | (1 << 30) | (1 << 31));
         }
 
         public static DialogResult InputBox(string promptText, string title, ref string value)
@@ -2148,6 +2252,22 @@ namespace wesh
             }
 
             return a.ToArray();
+        }
+
+        public static void ArrayToWeshArray(string name, string[] values)
+        {
+            var dict = new Dictionary<string, string>();
+            var i = 0;
+
+            foreach (string el in values)
+            {
+                dict.Add(i.ToString(), el);
+                i++;
+            }
+
+            dict.Add("length", i.ToString());
+
+            UserObjects[name] = dict;
         }
 
         private static string GetRequest(string url)

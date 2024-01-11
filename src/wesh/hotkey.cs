@@ -28,6 +28,7 @@ namespace wesh
         private const int WM_KEYDOWN = 0x0100;
         private const int WM_KEYUP = 0x0101;
         private readonly static IntPtr hookID = IntPtr.Zero;
+        private static GCHandle handle;
 
         public static IntPtr SetKeyHandler(bool stop, KeyHandlerCallback callback)
         {
@@ -78,14 +79,19 @@ namespace wesh
         public static void UnsetHotKey()
         {
             UnhookWindowsHookEx(hookID);
+            handle.Free();
         }
 
         private static IntPtr SetHook(LowLevelKeyboardProc proc)
         {
+            handle = GCHandle.Alloc(proc, GCHandleType.Normal);
+
             using (Process curProcess = Process.GetCurrentProcess())
-            using (ProcessModule curModule = curProcess.MainModule)
             {
-                return SetWindowsHookEx(WH_KEYBOARD_LL, proc, GetModuleHandle(curModule.ModuleName), 0);
+                using (ProcessModule curModule = curProcess.MainModule)
+                {
+                    return SetWindowsHookEx(WH_KEYBOARD_LL, proc, GetModuleHandle(curModule.ModuleName), 0);
+                }
             }
         }
 
