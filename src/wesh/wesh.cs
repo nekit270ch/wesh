@@ -19,6 +19,8 @@ using Microsoft.CSharp;
 using System.Threading.Tasks;
 using DllCallerLib;
 using System.Reflection;
+using Microsoft.JScript.Vsa;
+using System.Data;
 
 namespace wesh
 {
@@ -99,18 +101,20 @@ namespace wesh
 
         public delegate string Command(string[] args);
 
-        public const double Version = 2.3;
-        public const string VersionStr = "WESH v2.3";
+        public const double Version = 2.4;
+        public const string VersionStr = "WESH v2.4";
         public const string WeshNull = "__WESH_NULL";
         public static readonly string WeshPath = Process.GetCurrentProcess().MainModule.FileName;
         public static readonly string WeshDir = new FileInfo(Process.GetCurrentProcess().MainModule.FileName).Directory.FullName;
         private static readonly Random rand = new Random((int)DateTime.Now.Ticks);
         private static bool IsDefaultAssembliesLoaded = false;
+        private static VsaEngine JSEngine = VsaEngine.CreateEngine();
+        private static DataTable dt = new DataTable();
 
         public static Dictionary<string, Command> Commands = new Dictionary<string, Command>()
         {
             {".", (args)=>{
-                return EvalJS(String.Join(" ", args));
+                return dt.Compute(String.Join(" ", args), "").ToString();
             } },
 
             {"cond", (args)=>{
@@ -228,41 +232,155 @@ namespace wesh
             } },
 
             {"if", (args)=>{
-                if (Cond(args[0]))
+                bool hasElseBlock = args[args.Length - 2] == "else";
+                int offset = hasElseBlock ? 3 : 1;
+
+                if (Cond(String.Join(" ", args.Take(args.Length - offset))))
                 {
-                    return Exec(args[1]);
+                    return Exec(args[args.Length - offset]);
                 }
                 else
                 {
-                    return args.Length > 2?Exec(args[2]):"";
+                    return Exec(hasElseBlock ? args[args.Length - 1] : "");
                 }
             } },
 
             {"ife", (args)=>{
-                string cmd = args[0]=="!"?args[1]:args[0];
-                string code = args[0]=="!"?args[2]:args[1];
+                bool hasElseBlock = args[args.Length - 2] == "else";
+                int offset = hasElseBlock ? 3 : 1;
 
-                if (Exec(cmd) == (args[0]=="!"?"false":"true")) return Exec(code);
-                return args.Length>(args[0]=="!"?3:2)?Exec(args[0]=="!"?args[3]:args[2]):"";
+                string trueCode = args[args.Length - offset];
+                string falseCode = hasElseBlock ? args[args.Length - 1]: "";
+
+                bool result = false;
+
+                for(int i = 0; i < args.Length - offset; i++)
+                {
+                    string arg = args[i];
+
+                    if(i > 0)
+                    {
+                        if(arg == "or")
+                        {
+                            bool rs = false;
+
+                            if(args[i+1] == "not")
+                            {
+                                rs = Exec(args[i+2]) != "true";
+                                i++;
+                            }
+                            else
+                            {
+                                rs = Exec(args[i+1]) == "true";
+                            }
+
+                            result = result || rs;
+                            i++;
+                        }else if(arg == "and")
+                        {
+                            bool rs = false;
+
+                            if(args[i+1] == "not")
+                            {
+                                rs = Exec(args[i+2]) != "true";
+                                i++;
+                            }
+                            else
+                            {
+                                rs = Exec(args[i+1]) == "true";
+                            }
+
+                            result = result && rs;
+                            i++;
+                        }
+                        else
+                        {
+                            result = Exec(arg) == "true";
+                        }
+                    }
+                    else
+                    {
+                        result = Exec(arg) == "true";
+                    }
+                }
+
+                return Exec(result?trueCode:falseCode);
             } },
 
             {"while", (args)=>{
                 string r = "";
-                while (Cond(args[0]))
+                string cond = String.Join(" ", args.Take(args.Length - 1));
+                string code = args[args.Length - 1];
+
+                while (Cond(cond))
                 {
-                    r += Exec(args[1])+Environment.NewLine;
+                    r += Exec(code)+Environment.NewLine;
                 }
+
                 return r;
             } },
 
             {"whilee", (args)=>{
                 string r = "";
-                string cmd = args[0]=="!"?args[1]:args[0];
-                string code = args[0]=="!"?args[2]:args[1];
+                string code = args[args.Length - 1];
 
-                while (Exec(cmd) == (args[0]=="!"?"false":"true"))
+                while (true)
                 {
-                    r += Exec(code)+Environment.NewLine;
+                    bool result = false;
+
+                    for(int i = 0; i < args.Length - 1; i++)
+                    {
+                        string arg = args[i];
+
+                        if(i > 0)
+                        {
+                            if(arg == "or")
+                            {
+                                bool rs = false;
+
+                                if(args[i+1] == "not")
+                                {
+                                    rs = Exec(args[i+2]) != "true";
+                                    i++;
+                                }
+                                else
+                                {
+                                    rs = Exec(args[i+1]) == "true";
+                                }
+
+                                result = result || rs;
+                                i++;
+                            }else if(arg == "and")
+                            {
+                                bool rs = false;
+
+                                if(args[i+1] == "not")
+                                {
+                                    rs = Exec(args[i+2]) != "true";
+                                    i++;
+                                }
+                                else
+                                {
+                                    rs = Exec(args[i+1]) == "true";
+                                }
+
+                                result = result && rs;
+                                i++;
+                            }
+                            else
+                            {
+                                result = Exec(arg) == "true";
+                            }
+                        }
+                        else
+                        {
+                            result = Exec(arg) == "true";
+                        }
+                    }
+
+                    if(!result) break;
+
+                    r += Exec(code) + Environment.NewLine;
                 }
                 return r;
             } },
@@ -1611,7 +1729,20 @@ namespace wesh
             } },
 
             {"eobj.getProp", (args)=>{
-                return GetProp(ExtObjectTypes[args[0]], ExtObjects[args[0]], args[1]).ToString();
+                var m = GetProp(ExtObjectTypes[args[0]], ExtObjects[args[0]], args[1]);
+
+                var mType = m.GetType();
+                if(mType.FullName == "System.String") return m.ToString();
+                else if(mType.FullName.StartsWith("System.Int")) return m.ToString();
+                else if(mType.FullName == "System.Boolean") return BoolToString((bool)m);
+                else
+                {
+                    string name = "__WESH_EXT_OBJECT_"+GetRandomName();
+
+                    ExtObjectTypes.Add(name, mType);
+                    ExtObjects.Add(name, m);
+                    return name;
+                }
             } },
 
             {"eobj.setProp", (args)=>{
@@ -1637,6 +1768,8 @@ namespace wesh
                 foreach(string p in pa)
                 {
                     if(int.TryParse(p, out int v)) ar.Add(v);
+                    else if(double.TryParse(p, out double d)) ar.Add(d);
+                    else if(p.EndsWith("f") && float.TryParse(p.Replace("f", ""), out float f)) ar.Add(f);
                     else if(p == "true" || p == "false") ar.Add(StringToBool(p));
                     else if(ExtObjects.ContainsKey(p)) ar.Add(ExtObjects[p]);
                     else ar.Add(p);
@@ -1648,7 +1781,7 @@ namespace wesh
 
                 var mType = m.GetType();
                 if(mType.FullName == "System.String") return m.ToString();
-                else if(mType.FullName.StartsWith("System.Int")) return m.ToString();
+                else if(mType.FullName.StartsWith("System.Int") || mType.FullName == "System.Single" || mType.FullName == "System.Double") return m.ToString();
                 else if(mType.FullName == "System.Boolean") return BoolToString((bool)m);
                 else
                 {
@@ -1908,6 +2041,8 @@ namespace wesh
             { "codeBlockEnd", "}" },
             { "operatorBlockStart", "(" },
             { "operatorBlockEnd", ")" },
+            { "altOperatorBlockStart", "[" },
+            { "altOperatorBlockEnd", "]" },
             { "varOperator", "@" },
             { "execOperator", "&" },
             { "mathOperator", "%" },
@@ -2075,6 +2210,7 @@ namespace wesh
 
         private static string GetLangEl(string la)
         {
+
             string l = Lang[la];
             if (@"[]\^$.|?*+()".Contains(l))
             {
@@ -2409,7 +2545,7 @@ wesh [-v] [-h] [-c <команда>] [-f <файл>]
         {
             try
             {
-                return Eval.JScriptEvaluate(expr, Microsoft.JScript.Vsa.VsaEngine.CreateEngine()).ToString();
+                return Eval.JScriptEvaluate(expr, JSEngine).ToString();
             }
             catch (Exception)
             {
@@ -2420,7 +2556,7 @@ wesh [-v] [-h] [-c <команда>] [-f <файл>]
 
         private static bool Cond(string expr)
         {
-            return StringToBool(EvalJS(expr));
+            return (bool)dt.Compute(expr, "");
         }
 
         private static string ToBase64(string s)
@@ -2484,14 +2620,14 @@ wesh [-v] [-h] [-c <команда>] [-f <файл>]
                 return arg.Substring(1);
             }
 
-            if (arg[0] == Lang["execOperator"][0] && arg[1] != Lang["operatorBlockStart"][0])
+            if (arg[0] == Lang["execOperator"][0] && arg[1] != Lang["operatorBlockStart"][0] && arg[1] != Lang["altOperatorBlockStart"][0])
             {
                 return Exec(arg.Substring(1));
             }
 
-            if (arg[0] == Lang["mathOperator"][0] && arg[1] != Lang["operatorBlockStart"][0])
+            if (arg[0] == Lang["mathOperator"][0] && arg[1] != Lang["operatorBlockStart"][0] && arg[1] != Lang["altOperatorBlockStart"][0])
             {
-                return EvalJS(arg.Substring(1));
+                return dt.Compute(arg.Substring(1), "").ToString();
             }
 
             MatchCollection vbMatches = new Regex(GetLangEl("varOperator") + GetLangEl("operatorBlockStart") + "[^" + GetLangEl("operatorBlockEnd") + "]+" + GetLangEl("operatorBlockEnd")).Matches(arg);
@@ -2516,12 +2652,6 @@ wesh [-v] [-h] [-c <команда>] [-f <файл>]
                 }
             }
 
-            /*if(arg[0] == Lang["varOperator"][0] && arg[1] != Lang["operatorBlockStart"][0])
-            {
-                args[j] = GetVariable(arg.Substring(1));
-                continue;
-            }*/
-
             MatchCollection eMatches = new Regex(GetLangEl("execOperator") + GetLangEl("operatorBlockStart") + "[^" + GetLangEl("operatorBlockEnd") + "]+" + GetLangEl("operatorBlockEnd")).Matches(arg);
             if (eMatches.Count > 0)
             {
@@ -2540,7 +2670,40 @@ wesh [-v] [-h] [-c <команда>] [-f <файл>]
                 {
                     string val = mm.Value;
                     val = val.Replace(Lang["mathOperator"] + Lang["operatorBlockStart"], "").Replace(Lang["operatorBlockEnd"], "");
-                    arg = arg.Replace(mm.Value, EvalJS(val));
+                    arg = arg.Replace(mm.Value, dt.Compute(val, "").ToString());
+                }
+            }
+
+            MatchCollection avbMatches = new Regex(GetLangEl("varOperator") + GetLangEl("altOperatorBlockStart") + "[^" + GetLangEl("altOperatorBlockEnd") + "]+" + GetLangEl("altOperatorBlockEnd")).Matches(arg);
+            if (avbMatches.Count > 0)
+            {
+                foreach (Match vbm in avbMatches)
+                {
+                    string val = vbm.Value;
+                    val = val.Replace(Lang["varOperator"] + Lang["altOperatorBlockStart"], "").Replace(Lang["altOperatorBlockEnd"], "");
+                    arg = arg.Replace(vbm.Value, GetVariable(val));
+                }
+            }
+
+            MatchCollection aeMatches = new Regex(GetLangEl("execOperator") + GetLangEl("altOperatorBlockStart") + "[^" + GetLangEl("altOperatorBlockEnd") + "]+" + GetLangEl("altOperatorBlockEnd")).Matches(arg);
+            if (aeMatches.Count > 0)
+            {
+                foreach (Match em in aeMatches)
+                {
+                    string val = em.Value;
+                    val = val.Replace(Lang["execOperator"] + Lang["altOperatorBlockStart"], "").Replace(Lang["altOperatorBlockEnd"], "");
+                    arg = arg.Replace(em.Value, Exec(val));
+                }
+            }
+
+            MatchCollection amMatches = new Regex(GetLangEl("mathOperator") + GetLangEl("altOperatorBlockStart") + "[^" + GetLangEl("altOperatorBlockEnd") + "]+" + GetLangEl("altOperatorBlockEnd")).Matches(arg);
+            if (amMatches.Count > 0)
+            {
+                foreach (Match mm in amMatches)
+                {
+                    string val = mm.Value;
+                    val = val.Replace(Lang["mathOperator"] + Lang["altOperatorBlockStart"], "").Replace(Lang["altOperatorBlockEnd"], "");
+                    arg = arg.Replace(mm.Value, dt.Compute(val, "").ToString());
                 }
             }
 
@@ -2610,7 +2773,7 @@ wesh [-v] [-h] [-c <команда>] [-f <файл>]
                     args[j] = ParseArg(args[j]);
                 }
 
-                if (!Commands.ContainsKey(cmd))
+                if (!Commands.ContainsKey(ParseArg(cmd)))
                 {
                     if (Functions.ContainsKey(ParseArg(cmd)))
                     {
@@ -2636,7 +2799,7 @@ wesh [-v] [-h] [-c <команда>] [-f <файл>]
                         }
                         else if(args[0] == "=%")
                         {
-                            SetVariable(ParseArg(cmd), EvalJS(args[1]));
+                            SetVariable(ParseArg(cmd), dt.Compute(String.Join(" ", args.Skip(1)), "").ToString());
                             return "";
                         }
                     }
