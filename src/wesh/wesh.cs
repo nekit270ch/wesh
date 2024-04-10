@@ -101,8 +101,8 @@ namespace wesh
 
         public delegate string Command(string[] args);
 
-        public const double Version = 2.4;
-        public const string VersionStr = "WESH v2.4";
+        public const double Version = 2.5;
+        public const string VersionStr = "WESH v2.5";
         public const string WeshNull = "__WESH_NULL";
         public static readonly string WeshPath = Process.GetCurrentProcess().MainModule.FileName;
         public static readonly string WeshDir = new FileInfo(Process.GetCurrentProcess().MainModule.FileName).Directory.FullName;
@@ -119,6 +119,28 @@ namespace wesh
 
             {"cond", (args)=>{
                 return BoolToString(Cond(String.Join(" ", args)));
+            } },
+
+            {"bitop", (args)=>{
+                if(args[0] == "inv")
+                {
+                    return (~ToInt(args[1])).ToString();
+                }
+                else
+                {
+                    int total = ToInt(args[1]);
+
+                    for(int i = 2; i < args.Length; i++)
+                    {
+                        if(args[0] == "or") total |= ToInt(args[i]);
+                        else if(args[0] == "xor") total ^= ToInt(args[i]);
+                        else if(args[0] == "and") total &= ToInt(args[i]);
+                        else if(args[0] == "lsh") total <<= ToInt(args[i]);
+                        else if(args[0] == "rsh") total >>= ToInt(args[i]);
+                    }
+
+                    return total.ToString();
+                }
             } },
 
             {"echo", (args)=>{
@@ -308,20 +330,18 @@ namespace wesh
             } },
 
             {"while", (args)=>{
-                string r = "";
                 string cond = String.Join(" ", args.Take(args.Length - 1));
                 string code = args[args.Length - 1];
 
                 while (Cond(cond))
                 {
-                    r += Exec(code)+Environment.NewLine;
+                    Exec(code);
                 }
 
-                return r;
+                return "";
             } },
 
             {"whilee", (args)=>{
-                string r = "";
                 string code = args[args.Length - 1];
 
                 while (true)
@@ -380,19 +400,18 @@ namespace wesh
 
                     if(!result) break;
 
-                    r += Exec(code) + Environment.NewLine;
+                    Exec(code);
                 }
-                return r;
+                return "";
             } },
 
             {"for", (args)=>{
-                string r = "";
                 for(int i = ToInt(args[1]); i < ToInt(args[3]); i+=ToInt(args[2]))
                 {
                     SetVariable(args[0], i.ToString());
-                    r += Exec(args[4])+Environment.NewLine;
+                    Exec(args[4]);
                 }
-                return r;
+                return "";
             } },
 
             {"foreach", (args)=>{
@@ -426,7 +445,8 @@ namespace wesh
             } },
 
             {"func", (args)=>{
-                Functions.Add(args[0], args[1]);
+                Functions.Add(args[0], args[args.Length - 1]);
+                FunctionArguments.Add(args[0], args.Skip(1).Take(args.Length - 2).ToArray());
                 return "";
             } },
 
@@ -2075,6 +2095,7 @@ namespace wesh
         public static Dictionary<string, Dictionary<string, string>> UserObjects = new Dictionary<string, Dictionary<string, string>>();
         public static Dictionary<string, Control> Controls = new Dictionary<string, Control>();
         public static Dictionary<string, string> Functions = new Dictionary<string, string>();
+        public static Dictionary<string, string[]> FunctionArguments = new Dictionary<string, string[]>();
         public static Dictionary<string, IntPtr> Pointers = new Dictionary<string, IntPtr>();
         public static Dictionary<string, Type> ExtObjectTypes = new Dictionary<string, Type>();
         public static Dictionary<string, object> ExtObjects = new Dictionary<string, object>();
@@ -2715,6 +2736,14 @@ wesh [-v] [-h] [-c <команда>] [-f <файл>]
         public static string ExecFunction(string name, string[] args)
         {
             SetVariable("funcArgs", CreateArray(args));
+
+            int i = 0;
+            foreach(string argName in FunctionArguments[name])
+            {
+                SetVariable(argName, args[i]);
+                i++;
+            }
+
             return Exec(Functions[name], true, true);
         }
 
@@ -2745,7 +2774,7 @@ wesh [-v] [-h] [-c <команда>] [-f <файл>]
                         {
                             bool isr = !isFunc || c.Trim().StartsWith("return ");
                             string exr = Exec(c.Replace("\\" + Lang["cmdDelim"], Lang["cmdDelim"]));
-                            if (isr && exr.Trim().Length > 0) r += exr + Environment.NewLine;
+                            if (isr && exr.Trim().Length > 0) r += exr;
                         }
                     }
                     return r;
@@ -2800,6 +2829,11 @@ wesh [-v] [-h] [-c <команда>] [-f <файл>]
                         else if(args[0] == "=%")
                         {
                             SetVariable(ParseArg(cmd), dt.Compute(String.Join(" ", args.Skip(1)), "").ToString());
+                            return "";
+                        }
+                        else if(args[0] == "+=")
+                        {
+                            //SetVariable(ParseArg(cmd), double.Parse(dt.Compute(String.Join(" ", args.Skip(1)), "")));
                             return "";
                         }
                     }
