@@ -24,7 +24,7 @@ using System.Data;
 
 namespace wesh
 {
-    class WESH
+    public class WESH
     {
         [DllImport("user32.dll", CharSet = CharSet.Auto, CallingConvention = CallingConvention.StdCall)]
         private static extern bool SetForegroundWindow(IntPtr hWnd);
@@ -77,6 +77,9 @@ namespace wesh
         [DllImport("user32.dll", CharSet = CharSet.Auto, CallingConvention = CallingConvention.StdCall)]
         private static extern uint MapVirtualKey(uint uCode, uint uMapType);
 
+        [DllImport("user32.dll", CharSet = CharSet.Auto, CallingConvention = CallingConvention.StdCall)]
+        private static extern IntPtr GetDesktopWindow();
+
         private struct W32Rect
         {
             public int Left { get; set; }
@@ -101,8 +104,8 @@ namespace wesh
 
         public delegate string Command(string[] args);
 
-        public const double Version = 2.5;
-        public const string VersionStr = "WESH v2.5";
+        public const double Version = 2.6;
+        public const string VersionStr = "WESH v2.6";
         public const string WeshNull = "__WESH_NULL";
         public static readonly string WeshPath = Process.GetCurrentProcess().MainModule.FileName;
         public static readonly string WeshDir = new FileInfo(Process.GetCurrentProcess().MainModule.FileName).Directory.FullName;
@@ -231,6 +234,39 @@ namespace wesh
                     }
                     ExecScript(code);
                 }
+                return "";
+            } },
+
+            {"loadext", (args)=>{
+                string code = File.ReadAllText(GetPath(args[0]));
+                
+                string[] refAsm = args.Length > 1 ? args[1].Split(',') : new string[0];
+
+                var prov = new CSharpCodeProvider();
+
+                var cParams = new CompilerParameters();
+                cParams.GenerateExecutable = false;
+                cParams.GenerateInMemory = true;
+                cParams.ReferencedAssemblies.AddRange(new string[]{ "mscorlib.dll", "system.dll", WeshPath });
+                if(refAsm.Length > 0) cParams.ReferencedAssemblies.AddRange(refAsm);
+
+                var res = prov.CompileAssemblyFromSource(cParams, code);
+
+                if (res.Errors.HasErrors)
+                {
+                    string r = "";
+                    foreach(CompilerError err in res.Errors)
+                    {
+                        r += $"Compiler error: {err.ErrorText} at line {err.Line}{Environment.NewLine}";
+                    }
+                    throw new Exception(r);
+                }
+
+                var asm = res.CompiledAssembly;
+                var method = asm.GetType("WeshExtension").GetMethod("Main");
+
+                var ret = method.Invoke(null, new object[0]);
+
                 return "";
             } },
 
@@ -452,7 +488,8 @@ namespace wesh
 
             {"afunc", (args)=>{
                 string name = "__WESH_FUNCTION_"+GetRandomName();
-                Functions.Add(name, args[0]);
+                Functions.Add(name, args[args.Length - 1]);
+                FunctionArguments.Add(name, args.Take(args.Length - 1).ToArray());
                 return name;
             } },
 
@@ -580,7 +617,7 @@ namespace wesh
                 string code = args[0];
                 if(args[1] == "true") code = Regex.Replace(args[0], $@"[\\]{{1,}}([{GetLangEl("codeBlockStart")}{GetLangEl("codeBlockEnd")}{GetLangEl("cmdDelim")}]{{1}})", "$1");
                 string[] enPoint = args[2].Split('.');
-                string[] refAsm = args[3].Split(',');
+                string[] refAsm = args.Length > 3 ? args[3].Split(',') : new string[0];
                 string[] mArgs = args.Skip(4).ToArray();
 
                 var prov = new CSharpCodeProvider();
@@ -930,7 +967,7 @@ namespace wesh
                 {
                     string ces = ce.Trim();
 
-                    if (ces.Contains("()"))
+                    if (ces.Split(' ')[0].Contains("("))
                     {
                         string[] cla = ces.Split(')');
                         cla[0] = cla[0].Trim();
@@ -1499,6 +1536,33 @@ namespace wesh
                 string name = "__WESH_WIN32_HANDLE_"+GetRandomName();
                 IntPtr win = FindWindowEx(Pointers[args[0]], (IntPtr)0, WeshNullToNull(args[1]), WeshNullToNull(args[2]));
                 if(win == IntPtr.Zero) return WeshNull;
+                Pointers.Add(name, win);
+                return name;
+            } },
+
+            {"win32.getRootWindow", (args)=>{
+                string name = "__WESH_WIN32_HANDLE_"+GetRandomName();
+                Pointers.Add(name, GetDesktopWindow());
+                return name;
+            } },
+
+            {"win32.windowSelector", (args)=>{
+                IntPtr root = GetDesktopWindow();
+                IntPtr win = args.Length > 1?Pointers[args[1]]:root;
+
+                string data = args[0].Replace("\\>", "$GT");
+                string[] selectors = args[0].Split('>');
+
+                foreach(string selector in selectors)
+                {
+                    string sel = selector.Replace("$GT", ">");
+                    win = FindWindowEx(win, IntPtr.Zero, sel[0] == '.'?sel.Substring(1):null, sel[0] != '.'?sel:null);
+                    if(win == IntPtr.Zero) break;
+                }
+
+                if(win == root) return WeshNull;
+
+                string name = "__WESH_WIN32_HANDLE_"+GetRandomName();
                 Pointers.Add(name, win);
                 return name;
             } },
@@ -2833,7 +2897,26 @@ wesh [-v] [-h] [-c <команда>] [-f <файл>]
                         }
                         else if(args[0] == "+=")
                         {
-                            //SetVariable(ParseArg(cmd), double.Parse(dt.Compute(String.Join(" ", args.Skip(1)), "")));
+                            string varName = ParseArg(cmd);
+                            SetVariable(varName, (double.Parse(GetVariable(varName)) + double.Parse(dt.Compute(String.Join(" ", args.Skip(1)), "").ToString())).ToString());
+                            return "";
+                        }
+                        else if (args[0] == "-=")
+                        {
+                            string varName = ParseArg(cmd);
+                            SetVariable(varName, (double.Parse(GetVariable(varName)) - double.Parse(dt.Compute(String.Join(" ", args.Skip(1)), "").ToString())).ToString());
+                            return "";
+                        }
+                        else if (args[0] == "*=")
+                        {
+                            string varName = ParseArg(cmd);
+                            SetVariable(varName, (double.Parse(GetVariable(varName)) * double.Parse(dt.Compute(String.Join(" ", args.Skip(1)), "").ToString())).ToString());
+                            return "";
+                        }
+                        else if (args[0] == "/=")
+                        {
+                            string varName = ParseArg(cmd);
+                            SetVariable(varName, (double.Parse(GetVariable(varName)) / double.Parse(dt.Compute(String.Join(" ", args.Skip(1)), "").ToString())).ToString());
                             return "";
                         }
                     }
